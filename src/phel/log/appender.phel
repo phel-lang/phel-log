@@ -1,0 +1,99 @@
+(in-ns phel.log)
+
+;; ===========================================================================
+;; Appenders. An appender is a map:
+;;
+;;   {:name      :console            ; identifier, used for debugging
+;;    :min-level :info               ; per-appender threshold (optional)
+;;    :formatter :line               ; keyword or fn (optional, default :line)
+;;    :write!    (fn [event line])}  ; mandatory side-effecting writer
+;;
+;; The global dispatch loop calls `write-event!` on each enabled appender.
+;; ===========================================================================
+
+(defn write-event!
+  "Apply the appender's formatter then call its `:write!` side-effecting fn.
+   Skipped silently if the appender's per-appender `:min-level` is louder
+   than the event level."
+  [appender event]
+  (let [appender-min (get appender :min-level)]
+    (when (or (nil? appender-min)
+              (level<= appender-min (get event :level)))
+      (let [formatter (resolve-formatter (get appender :formatter :line))
+            line      (formatter event)
+            writer    (get appender :write!)]
+        (when (nil? writer)
+          (throw (php/new \InvalidArgumentException
+                          (str "Appender " (get appender :name :unnamed)
+                               " has no :write! function"))))
+        (writer event line)))))
+
+;; ---------------------------------------------------------------------------
+;; Console appender.
+;; ---------------------------------------------------------------------------
+
+(defn- write-stream!
+  "Write a line + newline to a PHP stream resource."
+  [stream line]
+  (php/fwrite stream (str line "\n")))
+
+(defn console-appender
+  "Write to STDOUT for :info and below, STDERR for :warn and above.
+   Options: :formatter (default :line), :min-level (optional)."
+  ([] (console-appender {}))
+  ([opts]
+   (merge {:name      :console
+           :formatter :line
+           :write!    (fn [event line]
+                        (let [stream (if (level<= :warn (get event :level))
+                                       (php/-> \STDERR)
+                                       (php/-> \STDOUT))]
+                          ;; Fall back to fopen(php://stderr) when constants
+                          ;; aren't available (CGI / phpunit isolation).
+                          (write-stream!
+                            (or (and (php/defined "STDOUT") stream)
+                                (php/fopen
+                                  (if (level<= :warn (get event :level))
+                                    "php://stderr"
+                                    "php://stdout")
+                                  "w"))
+                            line)))}
+          opts)))
+
+;; ---------------------------------------------------------------------------
+;; File appender.
+;; ---------------------------------------------------------------------------
+
+(defn file-appender
+  "Append-only file appender. Creates the file if it doesn't exist.
+   Required opts: :path. Optional: :formatter (default :line), :min-level."
+  [opts]
+  (let [path (get opts :path)]
+    (when (nil? path)
+      (throw (php/new \InvalidArgumentException
+                      "file-appender requires :path"))))
+  (merge {:name      :file
+          :formatter :line
+          :write!    (fn [event line]
+                       (php/file_put_contents
+                         (get opts :path)
+                         (str line "\n")
+                         (php/| (php/-> \FILE_APPEND) (php/-> \LOCK_EX))))}
+         opts))
+
+;; ---------------------------------------------------------------------------
+;; In-memory appender. Useful for tests and the REPL.
+;; ---------------------------------------------------------------------------
+
+(defn memory-appender
+  "Capture events into an atom (vector). Returns `[appender events-atom]`.
+   Tests call `(deref events-atom)` to assert what was logged."
+  ([] (memory-appender {}))
+  ([opts]
+   (let [events-atom (atom [])
+         appender    (merge {:name      :memory
+                             :formatter :line
+                             :write!    (fn [event _line]
+                                          (swap! events-atom #(php/array_merge % [event])))}
+                            opts)]
+     [appender events-atom])))

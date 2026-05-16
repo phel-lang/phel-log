@@ -1,0 +1,12 @@
+.idea/
+.vscode/
+.phel/
+out/
+var/
+vendor/
+composer.lock
+*.cache
+.phel-repl-history
+phel-config-local.php
+.claude/settings.local.json
+.claude/worktrees/

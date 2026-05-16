@@ -1,0 +1,80 @@
+(ns phel-log-tests.log.core-test
+  (:require phel.log :as log)
+  (:require phel.test :refer [deftest is testing]))
+
+(defn- with-memory-config
+  "Reset config to a single in-memory appender and return the events atom."
+  [opts]
+  (log/reset-config!)
+  (let [[app events] (log/memory-appender)]
+    (log/set-config! (merge log/default-config
+                            {:appenders [app]}
+                            opts))
+    events))
+
+(deftest test-info-macro-captures-call-site-ns
+  (let [events (with-memory-config {})]
+    (log/info "hello")
+    (is (= 1 (count (deref events))))
+    (is (= "phel-log-tests.log.core-test"
+           (get (first (deref events)) :ns)))))
+
+(deftest test-min-level-filters-quieter-events
+  (let [events (with-memory-config {:min-level :warn})]
+    (log/info "drop me")
+    (log/error "keep me")
+    (is (= 1 (count (deref events))))
+    (is (= :error (get (first (deref events)) :level)))))
+
+(deftest test-base-data-merges-into-event
+  (let [events (with-memory-config {:base-data {:app "phel" :env "test"}})]
+    (log/info "hi" {:k 1})
+    (let [data (get (first (deref events)) :data)]
+      (is (= "phel" (get data :app)))
+      (is (= "test" (get data :env)))
+      (is (= 1 (get data :k))))))
+
+(deftest test-base-data-overridden-by-call-site
+  (let [events (with-memory-config {:base-data {:env "prod"}})]
+    (log/info "hi" {:env "override"})
+    (is (= "override" (get (get (first (deref events)) :data) :env)))))
+
+(deftest test-processor-can-rewrite-event
+  (let [events (with-memory-config
+                 {:processors [(fn [ev] (merge ev {:message "MASKED"}))]})]
+    (log/info "secret")
+    (is (= "MASKED" (get (first (deref events)) :message)))))
+
+(deftest test-ns-filter-blocks-call
+  (let [events (with-memory-config
+                 {:ns-filter {:deny ["phel-log-tests.**"]}})]
+    (log/info "blocked")
+    (is (= 0 (count (deref events))))))
+
+(deftest test-spy-returns-value-and-logs-debug
+  (let [events (with-memory-config {:min-level :debug})]
+    (is (= 42 (log/spy 42)))
+    (is (= 1 (count (deref events))))
+    (is (= :debug (get (first (deref events)) :level)))))
+
+(deftest test-log-event-direct-call
+  (let [events (with-memory-config {:min-level :trace})]
+    (log/log-event! :trace "external" "from-php" {:via "psr"})
+    (let [ev (first (deref events))]
+      (is (= :trace      (get ev :level)))
+      (is (= "external"  (get ev :ns)))
+      (is (= "from-php"  (get ev :message)))
+      (is (= "psr"       (get (get ev :data) :via))))))
+
+(deftest test-all-level-macros-emit
+  (let [events (with-memory-config {:min-level :trace})]
+    (log/trace  "t")
+    (log/debug  "d")
+    (log/info   "i")
+    (log/warn   "w")
+    (log/error  "e")
+    (log/fatal  "f")
+    (log/report "r")
+    (is (= 7 (count (deref events))))
+    (is (= [:trace :debug :info :warn :error :fatal :report]
+           (map #(get % :level) (deref events))))))

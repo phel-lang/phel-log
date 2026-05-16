@@ -1,0 +1,48 @@
+{
+    "name": "phel-lang/phel-log",
+    "description": "Data-driven logging library for Phel Lang. Inspired by Timbre + Monolog. Levels, namespace filtering, pluggable appenders, PSR-3 adapter, Monolog handler bridge.",
+    "keywords": [
+        "phel",
+        "lisp",
+        "logging",
+        "logger",
+        "timbre",
+        "monolog",
+        "psr-3"
+    ],
+    "authors": [
+        {
+            "name": "Jose M. Valera Reales",
+            "email": "phel@chemaclass.es",
+            "homepage": "https://chemaclass.com"
+        }
+    ],
+    "homepage": "https://phel-lang.org/",
+    "license": "MIT",
+    "type": "library",
+    "prefer-stable": true,
+    "require": {
+        "php": ">=8.4",
+        "phel-lang/phel-lang": "^0.37",
+        "psr/log": "^3.0"
+    },
+    "require-dev": {
+        "monolog/monolog": "^3.0"
+    },
+    "suggest": {
+        "monolog/monolog": "Bridge phel-log events into Monolog handlers (Slack, Syslog, Elasticsearch, ...)"
+    },
+    "autoload": {
+        "psr-4": {
+            "Phel\\PhelLog\\": "src/php/"
+        }
+    },
+    "scripts": {
+        "test": "vendor/bin/phel test",
+        "format": "vendor/bin/phel format",
+        "repl": [
+            "Composer\\Config::disableProcessTimeout",
+            "vendor/bin/phel repl"
+        ]
+    }
+}

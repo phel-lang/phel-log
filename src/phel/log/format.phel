@@ -1,0 +1,71 @@
+(in-ns phel.log)
+
+;; ===========================================================================
+;; Formatters. A formatter is `(fn [event] string)`. Pure, no I/O.
+;;
+;; Two stock formats:
+;;   :line   "2026-05-16T10:21:33Z [INFO ] my-app.users - user logged in {...}"
+;;   :json   {"level":"info","ns":"my-app.users","time":...,"message":"...",...}
+;; ===========================================================================
+
+(defn- iso-time
+  "Format epoch-ms as ISO-8601 UTC: 2026-05-16T10:21:33.123Z."
+  [time-ms]
+  (let [secs    (php/intdiv time-ms 1000)
+        millis  (php/% time-ms 1000)
+        date-str (php/date "Y-m-d\\TH:i:s" secs)]
+    (str date-str "." (php/sprintf "%03d" millis) "Z")))
+
+(defn- pad-level
+  "Right-pad an uppercase level name to 5 chars so columns align."
+  [level]
+  (php/str_pad (level-name level) 5))
+
+(defn format-line
+  "Line formatter: human-readable one-line representation. Suitable for the
+   console appender and most file appenders."
+  [event]
+  (let [{:keys [level ns time-ms message data error]} event
+        head (str (iso-time time-ms) " [" (pad-level level) "] " ns " - " message)
+        body (if (php/empty data) "" (str " " (php/var_export data true)))
+        tail (if error
+               (str " | " (if (php/is_a error \Throwable)
+                            (php/-> error (getMessage))
+                            (str error)))
+               "")]
+    (str head body tail)))
+
+(defn format-json
+  "JSON formatter: one event per line, machine-readable."
+  [event]
+  (let [{:keys [level ns time-ms message data error]} event
+        payload {:level   (name level)
+                 :ns      ns
+                 :time    (iso-time time-ms)
+                 :time-ms time-ms
+                 :message message
+                 :data    data
+                 :error   (when error
+                            (if (php/is_a error \Throwable)
+                              {:class   (php/get_class error)
+                               :message (php/-> error (getMessage))
+                               :file    (php/-> error (getFile))
+                               :line    (php/-> error (getLine))}
+                              (str error)))}]
+    (json/encode payload)))
+
+(def builtin-formatters
+  "Built-in formatter keyword -> fn lookup."
+  {:line format-line
+   :json format-json})
+
+(defn resolve-formatter
+  "Resolve a formatter that is either a keyword (built-in) or a function."
+  [f]
+  (cond
+    (keyword? f) (or (get builtin-formatters f)
+                     (throw (php/new \InvalidArgumentException
+                                     (str "Unknown formatter: " f))))
+    (function? f) f
+    :else (throw (php/new \InvalidArgumentException
+                          "Formatter must be a keyword or function"))))

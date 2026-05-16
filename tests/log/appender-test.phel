@@ -1,0 +1,35 @@
+(ns phel-log-tests.log.appender-test
+  (:require phel.log :as log)
+  (:require phel.test :refer [deftest is testing]))
+
+(deftest test-memory-appender-captures-event
+  (let [[app events] (log/memory-appender)]
+    (log/write-event! app {:level :info :ns "n" :time-ms 0 :message "hi" :data {} :error nil})
+    (is (= 1 (count (deref events))))
+    (is (= "hi" (get (first (deref events)) :message)))))
+
+(deftest test-per-appender-min-level-skips-quieter-events
+  (let [[app events] (log/memory-appender {:min-level :error})]
+    (log/write-event! app {:level :info  :ns "n" :time-ms 0 :message "skip" :data {} :error nil})
+    (log/write-event! app {:level :error :ns "n" :time-ms 0 :message "keep" :data {} :error nil})
+    (is (= 1 (count (deref events))))
+    (is (= "keep" (get (first (deref events)) :message)))))
+
+(deftest test-file-appender-requires-path
+  (is (thrown? \InvalidArgumentException (log/file-appender {}))))
+
+(deftest test-file-appender-writes-line
+  (let [tmp (php/tempnam (php/sys_get_temp_dir) "phel-log")
+        app (log/file-appender {:path tmp})]
+    (log/write-event! app {:level :info :ns "n" :time-ms 1715846400000
+                           :message "to disk" :data {} :error nil})
+    (let [contents (php/file_get_contents tmp)]
+      (is (php/str_contains contents "to disk"))
+      (is (php/str_contains contents "INFO")))
+    (php/unlink tmp)))
+
+(deftest test-write-event-throws-when-write-missing
+  (is (thrown? \InvalidArgumentException
+               (log/write-event! {:name :bad}
+                                 {:level :info :ns "n" :time-ms 0
+                                  :message "x" :data {} :error nil}))))

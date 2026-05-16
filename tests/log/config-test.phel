@@ -1,0 +1,38 @@
+(ns phel-log-tests.log.config-test
+  (:require phel.log :as log)
+  (:require phel.test :refer [deftest is testing]))
+
+(deftest test-default-config-shape
+  (log/reset-config!)
+  (let [c (log/get-config)]
+    (is (= :info (get c :min-level)))
+    (is (vector? (get c :appenders)))
+    (is (= [] (get c :processors)))))
+
+(deftest test-update-config-merges
+  (log/reset-config!)
+  (log/update-config! {:min-level :debug :base-data {:env "test"}})
+  (let [c (log/get-config)]
+    (is (= :debug (get c :min-level)))
+    (is (= {:env "test"} (get c :base-data)))))
+
+(deftest test-ns-filter-no-filter-passes-all
+  (is (log/passes-filter? "any.ns" {})))
+
+(deftest test-ns-filter-allow-single-segment-wildcard
+  (let [cfg {:ns-filter {:allow ["my-app.*"]}}]
+    (is (log/passes-filter? "my-app.users" cfg))
+    (is (not (log/passes-filter? "other-app.users" cfg)))
+    (is (not (log/passes-filter? "my-app.users.detail" cfg)))))
+
+(deftest test-ns-filter-allow-deep-wildcard
+  (let [cfg {:ns-filter {:allow ["my-app.**"]}}]
+    (is (log/passes-filter? "my-app.users"          cfg))
+    (is (log/passes-filter? "my-app.users.detail"   cfg))
+    (is (not (log/passes-filter? "other-app.x"      cfg)))))
+
+(deftest test-ns-filter-deny-overrides-allow
+  (let [cfg {:ns-filter {:allow ["my-app.**"]
+                         :deny  ["my-app.noisy.**"]}}]
+    (is (log/passes-filter? "my-app.users"          cfg))
+    (is (not (log/passes-filter? "my-app.noisy.x"   cfg)))))

@@ -1,0 +1,84 @@
+(in-ns phel.log)
+
+;; ===========================================================================
+;; Global, mutable, data-driven config.
+;;
+;;   {:min-level :info
+;;    :appenders [<appender-map> ...]
+;;    :ns-filter {:allow ["my-app.*"] :deny ["my-app.noisy.*"]}
+;;    :processors [(fn [event] event) ...]
+;;    :base-data {:app "my-app" :env "prod"}}
+;;
+;; `set-config!` replaces the whole map; `update-config!` patches it via
+;; `merge`. Both are race-safe because the underlying state is an atom.
+;; ===========================================================================
+
+(def default-config
+  {:min-level  :info
+   :appenders  [(console-appender)]
+   :ns-filter  nil
+   :processors []
+   :base-data  {}})
+
+(def ^:private *config* (atom default-config))
+
+(defn get-config
+  "Snapshot of the current config map."
+  []
+  (deref *config*))
+
+(defn set-config!
+  "Replace the entire config map. Returns the new config."
+  [cfg]
+  (reset! *config* cfg)
+  cfg)
+
+(defn update-config!
+  "Patch the config: merges `partial-cfg` into the current config."
+  [partial-cfg]
+  (swap! *config* #(merge % partial-cfg))
+  (deref *config*))
+
+(defn reset-config!
+  "Restore default config. Mainly for tests."
+  []
+  (reset! *config* default-config)
+  default-config)
+
+;; ---------------------------------------------------------------------------
+;; Namespace filter. Patterns use `*` as a single-segment wildcard.
+;;   "my-app.*"    matches "my-app.users", "my-app.api"
+;;   "my-app.**"   matches "my-app.api.controllers" (greedy)
+;; ---------------------------------------------------------------------------
+
+(defn- pattern->regex
+  "Translate a wildcard pattern into a PHP-compatible regex.
+   `*`  -> `[^.]+`   single segment
+   `**` -> `.+`      multi-segment"
+  [pattern]
+  (let [escaped (php/preg_quote pattern "/")
+        with-** (php/str_replace "\\*\\*" ".+" escaped)
+        with-*  (php/str_replace "\\*"     "[^.]+" with-**)]
+    (str "/^" with-* "$/")))
+
+(defn- matches-any?
+  "True iff `ns-str` matches any pattern in `patterns`."
+  [patterns ns-str]
+  (let [pats (or patterns [])]
+    (php/boolval
+      (php/array_reduce
+        pats
+        (fn [hit pattern]
+          (if hit hit (php/preg_match (pattern->regex pattern) ns-str)))
+        false))))
+
+(defn passes-filter?
+  "True iff `ns-str` passes the configured :ns-filter.
+   No filter = pass. :deny overrides :allow."
+  [ns-str cfg]
+  (let [f (get cfg :ns-filter)]
+    (cond
+      (nil? f) true
+      (matches-any? (get f :deny) ns-str) false
+      (php/empty (get f :allow))          true
+      :else (matches-any? (get f :allow) ns-str))))

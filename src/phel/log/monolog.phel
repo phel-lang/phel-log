@@ -1,0 +1,59 @@
+(in-ns phel.log)
+
+;; ===========================================================================
+;; Monolog bridge. Forward phel.log events into any
+;; `Monolog\Handler\HandlerInterface`. This means every Monolog handler
+;; (Slack, Syslog, RotatingFile, ElasticSearch, ...) becomes a valid
+;; phel.log appender at zero cost.
+;;
+;; Bridge does NOT pull monolog/monolog as a hard dependency — the user
+;; supplies the handler instance, we just call `handle()` on it.
+;; ===========================================================================
+
+(def level->monolog-int
+  "Map phel.log levels to Monolog\\Level integer values.
+   Values match Monolog 3.x's `Monolog\\Level::*->value` ints (PSR-3 syslog
+   severities, lower = louder)."
+  {:trace  100   ; -> DEBUG
+   :debug  100
+   :info   200
+   :warn   300
+   :error  400
+   :fatal  500
+   :report 600}) ; -> ALERT
+
+(defn- event->log-record
+  "Build a `Monolog\\LogRecord` from a phel event.
+   Uses `php/new` with named args mirroring Monolog 3.x positional order."
+  [event channel]
+  (let [{:keys [level message data time-ms]} event
+        millis-of-sec (php/% time-ms 1000)
+        secs          (php/intdiv time-ms 1000)
+        datetime      (php/new \DateTimeImmutable
+                              (str "@" secs))
+        with-millis   (php/-> datetime
+                              (modify (str "+" millis-of-sec " milliseconds")))]
+    (php/new \Monolog\LogRecord
+             with-millis
+             channel
+             (php/new \Monolog\Level (get level->monolog-int level 200))
+             message
+             (or data {}))))
+
+(defn monolog-appender
+  "Bridge a `Monolog\\Handler\\HandlerInterface` as a phel.log appender.
+
+   Required opts: :handler (Monolog handler instance).
+   Optional opts: :channel (string, default \"phel\"), :min-level."
+  [opts]
+  (let [handler (get opts :handler)]
+    (when (nil? handler)
+      (throw (php/new \InvalidArgumentException
+                      "monolog-appender requires :handler"))))
+  (merge {:name      :monolog
+          :formatter :line  ; Monolog has its own formatting, but we still keep one for fall-through write!s
+          :write!    (fn [event _line]
+                       (let [channel (get opts :channel "phel")
+                             record  (event->log-record event channel)]
+                         (php/-> (get opts :handler) (handle record))))}
+         opts))

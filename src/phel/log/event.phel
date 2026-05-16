@@ -1,0 +1,40 @@
+(in-ns phel.log)
+
+;; ===========================================================================
+;; Event = plain map. Plain map keeps it serialisable and easy to
+;; transform via :processors middleware.
+;;
+;;   {:level    :info                ; level keyword
+;;    :ns       "my-app.users"       ; caller namespace, expand-time string
+;;    :time-ms  1715846400000        ; epoch milliseconds, integer
+;;    :message  "user logged in"     ; rendered string
+;;    :data     {:user-id 42}        ; extra context map (may be nil)
+;;    :error    nil}                 ; optional \Throwable / exception map
+;; ===========================================================================
+
+(defn now-ms
+  "Current wall-clock time as integer epoch milliseconds."
+  []
+  (php/intval (php/* 1000 (php/microtime true))))
+
+(defn- render-message
+  "Render the macro `message` argument(s) into a single string.
+   - string -> as-is
+   - vector -> elements `str`-joined with single space
+   - anything else -> `str` form of the value"
+  [m]
+  (cond
+    (string? m) m
+    (vector? m) (str/join " " (map str m))
+    :else       (str m)))
+
+(defn make-event
+  "Build an event map. `message` and `data` are user-supplied; `level` and
+   `ns-str` are filled in by the calling macro."
+  [level ns-str message data]
+  {:level   level
+   :ns      ns-str
+   :time-ms (now-ms)
+   :message (render-message message)
+   :data    (or data {})
+   :error   (get (or data {}) :error)})

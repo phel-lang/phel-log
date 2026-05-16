@@ -1,0 +1,46 @@
+(ns phel-log-tests.log.format-test
+  (:require phel.log :as log)
+  (:require phel.test :refer [deftest is]))
+
+(defn- fixed-event []
+  {:level   :info
+   :ns      "my-app.users"
+   :time-ms 1715846400123
+   :message "user logged in"
+   :data    {}
+   :error   nil})
+
+(deftest test-line-formatter-contains-level-ns-message
+  (let [out (log/format-line (fixed-event))]
+    (is (php/str_contains out "[INFO ]"))
+    (is (php/str_contains out "my-app.users"))
+    (is (php/str_contains out "user logged in"))
+    (is (php/str_contains out "2026-"))))
+
+(deftest test-line-formatter-renders-data-when-not-empty
+  (let [out (log/format-line (merge (fixed-event) {:data {:k 1}}))]
+    (is (php/str_contains out ":k"))
+    (is (php/str_contains out "1"))))
+
+(deftest test-line-formatter-renders-error-message
+  (let [err (php/new \RuntimeException "kaboom")
+        out (log/format-line (merge (fixed-event) {:error err}))]
+    (is (php/str_contains out "kaboom"))))
+
+(deftest test-json-formatter-is-valid-one-line-json
+  (let [out (log/format-json (fixed-event))]
+    (is (string? out))
+    (is (not (php/str_contains out "\n")))
+    (is (php/str_contains out "\"level\":\"info\""))
+    (is (php/str_contains out "\"ns\":\"my-app.users\""))))
+
+(deftest test-resolve-formatter-keyword
+  (is (= log/format-line (log/resolve-formatter :line)))
+  (is (= log/format-json (log/resolve-formatter :json))))
+
+(deftest test-resolve-formatter-rejects-unknown-keyword
+  (is (thrown? \InvalidArgumentException (log/resolve-formatter :nope))))
+
+(deftest test-resolve-formatter-passes-fn-through
+  (let [f (fn [_e] "x")]
+    (is (= f (log/resolve-formatter f)))))

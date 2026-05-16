@@ -1,0 +1,42 @@
+(in-ns phel.log)
+
+;; ===========================================================================
+;; Levels. Numeric ranks so a single :min-level filter is one `php/<` away.
+;;
+;; Mirrors Timbre's :trace -> :report ordering. PSR-3's :emergency / :alert /
+;; :critical / :notice / :warning all map onto this scale in `log/monolog`.
+;; ===========================================================================
+
+(def level-ranks
+  "Numeric rank per level keyword. Lower = noisier, higher = louder."
+  {:trace  0
+   :debug 10
+   :info  20
+   :warn  30
+   :error 40
+   :fatal 50
+   :report 60})
+
+(defn level-rank
+  "Numeric rank of `level`. Throws on unknown level."
+  [level]
+  (let [rank (get level-ranks level)]
+    (when (nil? rank)
+      (throw (php/new \InvalidArgumentException
+                      (str "Unknown log level: " level))))
+    rank))
+
+(defn level<=
+  "True iff level `a` is at most as loud as level `b`."
+  [a b]
+  (php/<= (level-rank a) (level-rank b)))
+
+(defn level>=
+  "True iff level `a` is at least as loud as level `b`."
+  [a b]
+  (php/>= (level-rank a) (level-rank b)))
+
+(defn level-name
+  "Uppercase string name of `level`, e.g. :info -> \"INFO\"."
+  [level]
+  (php/strtoupper (name level)))

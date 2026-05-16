@@ -1,0 +1,25 @@
+(ns phel.log
+  (:require phel.string :as str)
+  (:require phel.json :as json))
+
+;; ===========================================================================
+;; Phel logging library. Data-driven config, pluggable appenders,
+;; namespace + level filtering, Monolog bridge, PSR-3 adapter.
+;;
+;; Same-namespace multi-file split mirrors phel.core / phel.sql.
+;; ===========================================================================
+
+(declare make-event [level ns-str message data])
+(declare emit! [event])
+(declare passes-filter? [ns-str cfg])
+(declare apply-processors [event processors])
+
+;; Order matters: later files reference earlier ones at call time, so any
+;; ordering works in principle, but reading top-to-bottom should be coherent.
+(load "log/level")
+(load "log/event")
+(load "log/format")
+(load "log/appender")
+(load "log/monolog")
+(load "log/config")
+(load "log/core")

@@ -1,0 +1,22 @@
+(ns phel-log-tests.log.level-test
+  (:require phel.log :as log)
+  (:require phel.test :refer [deftest is]))
+
+(deftest test-level-rank-known
+  (is (= 0  (log/level-rank :trace)))
+  (is (= 20 (log/level-rank :info)))
+  (is (= 60 (log/level-rank :report))))
+
+(deftest test-level-rank-unknown-throws
+  (is (thrown? \InvalidArgumentException (log/level-rank :loud))))
+
+(deftest test-level-compare
+  (is (log/level<= :debug :info))
+  (is (log/level<= :info  :info))
+  (is (not (log/level<= :error :info)))
+  (is (log/level>= :error :info))
+  (is (not (log/level>= :debug :info))))
+
+(deftest test-level-name
+  (is (= "INFO"   (log/level-name :info)))
+  (is (= "REPORT" (log/level-name :report))))

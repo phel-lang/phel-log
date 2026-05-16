@@ -1,0 +1,58 @@
+(ns phel-log-tests.e2e-test
+  (:require phel.log :as log)
+  (:require phel.test :refer [deftest is testing]))
+
+;; ===========================================================================
+;; End-to-end scenarios. Per-domain tests under tests/log/ each focus on
+;; one piece. This file exercises realistic compositions; if those pass
+;; but one of these fails, a cross-cutting regression has slipped in.
+;; ===========================================================================
+
+(defn- fresh-memory [opts]
+  (log/reset-config!)
+  (let [[app events] (log/memory-appender)]
+    (log/set-config! (merge log/default-config {:appenders [app]} opts))
+    events))
+
+(deftest e2e-multi-appender-fanout-respects-per-appender-threshold
+  (testing "memory captures everything, second memory only :error+"
+           (log/reset-config!)
+           (let [[noisy ne] (log/memory-appender)
+                 [quiet qe] (log/memory-appender {:min-level :error})]
+             (log/set-config! (merge log/default-config
+                                     {:min-level :debug
+                                      :appenders [noisy quiet]}))
+             (log/info  "low")
+             (log/error "high")
+             (is (= 2 (count (deref ne))))
+             (is (= 1 (count (deref qe))))
+             (is (= :error (get (first (deref qe)) :level))))))
+
+(deftest e2e-json-format-roundtrip-via-memory
+  (testing "json formatter produces a one-line, parseable representation"
+           (let [events (fresh-memory {})
+                 _      (log/info "json me" {:user-id 42})
+                 ev     (first (deref events))
+                 line   (log/format-json ev)]
+             (is (string? line))
+             (is (not (php/str_contains line "\n")))
+             (is (php/str_contains line "\"message\":\"json me\""))
+             (is (php/str_contains line "\"user-id\":42")))))
+
+(deftest e2e-processor-pipeline-then-ns-filter-then-write
+  (testing "processors run only on events that passed level + ns filters"
+           (let [events (fresh-memory
+                         {:min-level :info
+                          :ns-filter {:allow ["phel-log-tests.**"]}
+                          :processors [(fn [ev] (merge ev {:data (merge (get ev :data) {:trace-id "abc"})}))]})]
+             (log/info "tagged" {:user-id 7})
+             (let [ev (first (deref events))]
+               (is (= "abc" (get (get ev :data) :trace-id)))
+               (is (= 7     (get (get ev :data) :user-id)))))))
+
+(deftest e2e-pure-and-deterministic-formatters
+  (testing "formatters do not mutate the event map"
+           (let [ev {:level :info :ns "n" :time-ms 1715846400000
+                     :message "x" :data {:k 1} :error nil}]
+             (is (= (log/format-line ev) (log/format-line ev)))
+             (is (= (log/format-json ev) (log/format-json ev))))))

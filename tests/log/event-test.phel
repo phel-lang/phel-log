@@ -1,0 +1,26 @@
+(ns phel-log-tests.log.event-test
+  (:require phel.log :as log)
+  (:require phel.test :refer [deftest is]))
+
+(deftest test-make-event-string-message
+  (let [ev (log/make-event :info "my-ns" "hello" {:k 1})]
+    (is (= :info   (get ev :level)))
+    (is (= "my-ns" (get ev :ns)))
+    (is (= "hello" (get ev :message)))
+    (is (= {:k 1}  (get ev :data)))
+    (is (php/is_int (get ev :time-ms)))))
+
+(deftest test-make-event-vector-message-is-joined
+  (let [ev (log/make-event :info "n" ["a" "b" 3] nil)]
+    (is (= "a b 3" (get ev :message)))
+    (is (= {} (get ev :data)))))
+
+(deftest test-make-event-extracts-error-from-data
+  (let [err (php/new \RuntimeException "boom")
+        ev  (log/make-event :error "n" "fail" {:error err})]
+    (is (= err (get ev :error)))))
+
+(deftest test-now-ms-positive-int
+  (let [t (log/now-ms)]
+    (is (php/is_int t))
+    (is (php/> t 0))))
