@@ -84,9 +84,9 @@
   [patterns ns-str]
   (let [pats (or patterns [])]
     (truthy?
-      (some (fn [pattern]
-              (php/== 1 (php/preg_match (pattern->regex pattern) ns-str)))
-            pats))))
+     (some (fn [pattern]
+             (php/== 1 (php/preg_match (pattern->regex pattern) ns-str)))
+           pats))))
 
 (defn- empty-coll?
   "True iff `coll` is nil or has count 0. Avoids PHP's `empty()` language
@@ -100,7 +100,7 @@
   [ns-str cfg]
   (let [f (get cfg :ns-filter)]
     (cond
-      (nil? f) true
+      (nil? f)                            true
       (matches-any? (get f :deny) ns-str) false
       (empty-coll? (get f :allow))        true
-      :else (matches-any? (get f :allow) ns-str))))
+      :else                               (matches-any? (get f :allow) ns-str))))

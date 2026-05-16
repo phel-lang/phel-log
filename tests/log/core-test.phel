@@ -41,13 +41,13 @@
 
 (deftest test-processor-can-rewrite-event
   (let [events (with-memory-config
-                 {:processors [(fn [ev] (merge ev {:message "MASKED"}))]})]
+                {:processors [(fn [ev] (merge ev {:message "MASKED"}))]})]
     (log/info "secret")
     (is (= "MASKED" (get (first (deref events)) :message)))))
 
 (deftest test-ns-filter-blocks-call
   (let [events (with-memory-config
-                 {:ns-filter {:deny ["phel-log-tests.**"]}})]
+                {:ns-filter {:deny ["phel-log-tests.**"]}})]
     (log/info "blocked")
     (is (= 0 (count (deref events))))))
 

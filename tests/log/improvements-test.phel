@@ -44,7 +44,7 @@
 (deftest test-with-context-attaches-fields-to-events
   (let [events (with-mem {})]
     (log/with-context {:request-id "abc"}
-      (log/info "inside"))
+                      (log/info "inside"))
     (log/info "outside")
     (let [evs (deref events)]
       (is (= "abc" (get (get (first evs) :data) :request-id)))
@@ -53,8 +53,8 @@
 (deftest test-nested-with-context-inner-overrides-outer
   (let [events (with-mem {})]
     (log/with-context {:request-id "outer" :region "eu"}
-      (log/with-context {:request-id "inner"}
-        (log/info "deep")))
+                      (log/with-context {:request-id "inner"}
+                                        (log/info "deep")))
     (let [data (get (first (deref events)) :data)]
       (is (= "inner" (get data :request-id)))
       (is (= "eu"    (get data :region))))))
@@ -62,11 +62,11 @@
 (deftest test-per-call-data-wins-over-context
   (let [events (with-mem {})]
     (log/with-context {:k :from-ctx}
-      (log/info "x" {:k :from-call})))
+                      (log/info "x" {:k :from-call})))
   ;; events captured in previous binding scope's atom — re-bind cleanly:
   (let [events (with-mem {})]
     (log/with-context {:k :from-ctx}
-      (log/info "x" {:k :from-call}))
+                      (log/info "x" {:k :from-call}))
     (is (= :from-call (get (get (first (deref events)) :data) :k)))))
 
 ;; ---------------------------------------------------------------------------
@@ -86,7 +86,7 @@
   (let [events (with-mem {})]
     (is (thrown? \RuntimeException
                  (log/timed :info "boom"
-                   (throw (php/new \RuntimeException "x")))))
+                            (throw (php/new \RuntimeException "x")))))
     (let [ev (first (deref events))]
       (is (= :error (get ev :level)))
       (is (php/is_a (get (get ev :data) :error) \Throwable))
@@ -162,4 +162,4 @@
     (is (not (log/passes-filter? "other.app" cfg)))
     ;; Burn through the cache path repeatedly:
     (dotimes [_ 100]
-      (is (log/passes-filter? "my-app.api" cfg)))))
+             (is (log/passes-filter? "my-app.api" cfg)))))

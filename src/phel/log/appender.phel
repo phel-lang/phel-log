@@ -119,9 +119,9 @@
                        ;; the appender works in CLI and FPM environments
                        ;; where the constants resolve differently.
                        (php/file_put_contents
-                         (get opts :path)
-                         (str line "\n")
-                         10))}
+                        (get opts :path)
+                        (str line "\n")
+                        10))}
          opts))
 
 ;; ---------------------------------------------------------------------------

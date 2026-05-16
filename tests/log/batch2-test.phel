@@ -116,18 +116,18 @@
         ev       {:level :info :ns "n" :time-ms 0
                   :message "x" :data {} :error nil}]
     (dotimes [_ 50]
-      (is (nil? (drop-all ev))))))
+             (is (nil? (drop-all ev))))))
 
 (deftest test-sampler-one-keeps-all
   (let [keep-all (log/sampler 1.0)
         ev       {:level :info :ns "n" :time-ms 0
                   :message "x" :data {} :error nil}]
     (dotimes [_ 50]
-      (is (= ev (keep-all ev))))))
+             (is (= ev (keep-all ev))))))
 
 (deftest test-level-sampler-only-samples-below-gate
   ;; Gate :info, rate 0.0 -> every :info event drops, every :warn passes.
-  (let [proc (log/level-sampler :info 0.0)
+  (let [proc    (log/level-sampler :info 0.0)
         info-ev {:level :info :ns "n" :time-ms 0 :message "" :data {} :error nil}
         warn-ev {:level :warn :ns "n" :time-ms 0 :message "" :data {} :error nil}]
     (is (nil? (proc info-ev)))
@@ -152,7 +152,7 @@
     (is (not (nil? (proc ev1))))
     (is (nil? (proc ev1)))                  ; same second: dropped
     (is (not (nil? (proc ev2))))            ; next second: allowed again
-    ))
+))
 
 (deftest test-rate-limiter-buckets-per-key
   (let [proc (log/rate-limiter 1)
@@ -197,9 +197,9 @@
     (log/init! :error [sentinel-app] {:base-data {:sentinel true}}))
   (let [prev (log/get-config)]
     (log/with-captured-events events
-      (log/info "captured here")
-      (is (= 1 (count (deref events))))
-      (is (= "captured here" (get (first (deref events)) :message))))
+                              (log/info "captured here")
+                              (is (= 1 (count (deref events))))
+                              (is (= "captured here" (get (first (deref events)) :message))))
     (is (= prev (log/get-config))
         "config must be restored after the body")))
 
@@ -209,7 +209,7 @@
   (let [prev (log/get-config)]
     (is (thrown? \RuntimeException
                  (log/with-captured-events _
-                   (throw (php/new \RuntimeException "x")))))
+                                           (throw (php/new \RuntimeException "x")))))
     (is (= prev (log/get-config)))))
 
 ;; ---------------------------------------------------------------------------
@@ -219,9 +219,9 @@
 
 (deftest test-make-psr-logger-routes-into-pipeline
   (log/with-captured-events events
-    (let [logger (log/make-psr-logger "my-app.users")]
-      (php/-> logger (info "hello {who}" (php-associative-array "who" "world"))))
-    (let [ev (first (deref events))]
-      (is (= :info (get ev :level)))
-      (is (= "hello world" (get ev :message)))
-      (is (= "my-app.users" (get ev :ns))))))
+                            (let [logger (log/make-psr-logger "my-app.users")]
+                              (php/-> logger (info "hello {who}" (php-associative-array "who" "world"))))
+                            (let [ev (first (deref events))]
+                              (is (= :info (get ev :level)))
+                              (is (= "hello world" (get ev :message)))
+                              (is (= "my-app.users" (get ev :ns))))))

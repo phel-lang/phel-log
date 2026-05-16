@@ -296,7 +296,7 @@
   [events-sym & body]
   (let [prev-sym (gensym "prev-cfg__")
         app-sym  (gensym "app__")]
-    `(let [~prev-sym       (get-config)
+    `(let [~prev-sym              (get-config)
            [~app-sym ~events-sym] (memory-appender)]
        (try
          (set-config! (merge default-config

@@ -11,8 +11,8 @@
 (defn- iso-time
   "Format epoch-ms as ISO-8601 UTC: 2026-05-16T10:21:33.123Z."
   [time-ms]
-  (let [secs    (php/intdiv time-ms 1000)
-        millis  (php/% time-ms 1000)
+  (let [secs     (php/intdiv time-ms 1000)
+        millis   (php/% time-ms 1000)
         date-str (php/date "Y-m-d\\TH:i:s" secs)]
     (str date-str "." (php/sprintf "%03d" millis) "Z")))
 
@@ -50,9 +50,9 @@
          depth 0
          acc   []]
     (cond
-      (nil? cur)                       acc
+      (nil? cur)                          acc
       (php/<= *max-previous-chain* depth) (push acc {:truncated true})
-      :else (recur (php/-> cur (getPrevious))
+      :else                               (recur (php/-> cur (getPrevious))
                    (php/+ depth 1)
                    (push acc (serialize-throwable cur))))))
 
@@ -88,12 +88,12 @@
    Errors render as a short ` | Class: message (file:line)` tag."
   [event]
   (let [{:keys [level ns time-ms message data error]} event
-        head (str (iso-time time-ms) " [" (pad-level level) "] " ns " - " message)
-        body (if (data-empty? data) "" (str " " (print-str data)))
-        tail (cond
-               (nil? error)                 ""
-               (php/is_a error \Throwable)  (short-throwable-tag error)
-               :else                        (str " | " error))]
+        head                                          (str (iso-time time-ms) " [" (pad-level level) "] " ns " - " message)
+        body                                          (if (data-empty? data) "" (str " " (print-str data)))
+        tail                                          (cond
+               (nil? error)                ""
+               (php/is_a error \Throwable) (short-throwable-tag error)
+               :else                       (str " | " error))]
     (str head body tail)))
 
 (defn format-json
@@ -102,7 +102,7 @@
    chain) so log pipelines can inspect them without re-parsing."
   [event]
   (let [{:keys [level ns time-ms message data error]} event
-        payload {:level   (name level)
+        payload                                       {:level   (name level)
                  :ns      ns
                  :time    (iso-time time-ms)
                  :time-ms time-ms
@@ -123,9 +123,9 @@
   "Resolve a formatter that is either a keyword (built-in) or a function."
   [f]
   (cond
-    (keyword? f) (or (get builtin-formatters f)
+    (keyword? f)  (or (get builtin-formatters f)
                      (throw (php/new \InvalidArgumentException
                                      (str "Unknown formatter: " f))))
     (function? f) f
-    :else (throw (php/new \InvalidArgumentException
+    :else         (throw (php/new \InvalidArgumentException
                           "Formatter must be a keyword or function"))))
