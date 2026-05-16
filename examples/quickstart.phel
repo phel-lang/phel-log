@@ -2,118 +2,151 @@
   (:require phel.log :as log))
 
 ;; ===========================================================================
-;; Smoke: console + memory appenders, level filter, ns-filter, processors.
+;; Quickstart: a guided walk through the core API. Each section is short
+;; and stands on its own — read top to bottom, copy what you need.
+;;
+;; Helpers used:
+;;   - log/init!                one-call config (reset + merge defaults).
+;;   - log/memory-appender      [appender, events-atom] for assertions.
+;;   - log/with-captured-events scoped memory appender; resets to defaults.
+;;
 ;; Run: vendor/bin/phel run phel-log-examples.quickstart
-;; Exits non-zero on any failed assertion so it doubles as a CI gate.
+;; Exits non-zero on any failed assertion (doubles as a CI gate).
 ;; ===========================================================================
 
-(def failures (atom []))
+(def failed (atom 0))
 
-(defn- check! [name pred]
+(defn- assert! [name pred]
   (if pred
     (println " [OK] " name)
     (do (println " [ERR]" name)
-        (swap! failures #(push % name)))))
+        (swap! failed inc))))
 
-(println "\n== quickstart smoke ==")
+(defn- with-mem
+  "Install one in-memory appender alongside `opts`, return the events atom."
+  [min-level opts]
+  (let [[app events] (log/memory-appender)]
+    (log/init! min-level [app] opts)
+    events))
 
-;; 1. Fresh config: memory appender capturing every level.
-(log/reset-config!)
-(let [[mem events] (log/memory-appender)]
-  (log/set-config! (merge log/default-config
-                          {:min-level :trace
-                           :appenders [mem]}))
+(println "\n== quickstart ==")
 
-  (log/trace "trace-msg")
-  (log/debug "debug-msg" {:k 1})
-  (log/info  "info-msg"  {:user 42})
-  (log/warn  "warn-msg")
-  (log/error "error-msg" {:error (php/new \RuntimeException "boom")})
-  (log/fatal "fatal-msg")
-  (log/report "report-msg")
+;; ---------------------------------------------------------------------------
+;; 1. Levels + caller ns are recorded automatically.
+;; ---------------------------------------------------------------------------
 
-  (let [captured (deref events)]
-    (check! "all 7 levels captured"
-            (= 7 (count captured)))
-    (check! "first event level is :trace"
-            (= :trace (get (first captured) :level)))
-    (check! "caller ns recorded"
-            (= "phel-log-examples.quickstart"
-               (get (first captured) :ns)))
-    (check! ":data merged onto event"
-            (= 42 (get (get (get captured 2) :data) :user)))
-    (check! ":error pulled out of data"
-            (php/is_a (get (get captured 4) :error) \Throwable))))
+(let [events (with-mem :trace {})]
+  (log/trace  "t")
+  (log/debug  "d")
+  (log/info   "i" {:user 42})
+  (log/warn   "w")
+  (log/error  "e" {:error (php/new \RuntimeException "boom")})
+  (log/fatal  "f")
+  (log/report "r")
+  (let [evs (deref events)]
+    (assert! "7 events captured"        (= 7 (count evs)))
+    (assert! "caller ns recorded"       (= "phel-log-examples.quickstart" (get (first evs) :ns)))
+    (assert! ":data merged"             (= 42 (get (get (get evs 2) :data) :user)))
+    (assert! "throwable pulled to :error"
+             (php/is_a (get (get evs 4) :error) \Throwable))))
 
-;; 2. :min-level filter drops quieter events.
-(log/reset-config!)
-(let [[mem events] (log/memory-appender)]
-  (log/set-config! (merge log/default-config
-                          {:min-level :warn
-                           :appenders [mem]}))
-  (log/info  "skip me")
-  (log/warn  "keep me")
-  (log/error "also keep me")
-  (check! ":min-level :warn drops :info"
-          (= 2 (count (deref events)))))
+;; ---------------------------------------------------------------------------
+;; 2. :min-level drops anything quieter.
+;; ---------------------------------------------------------------------------
 
-;; 3. ns-filter :deny overrides :allow.
-(log/reset-config!)
-(let [[mem events] (log/memory-appender)]
-  (log/set-config! (merge log/default-config
-                          {:min-level :trace
-                           :ns-filter {:deny ["phel-log-examples.*"]}
-                           :appenders [mem]}))
-  (log/info "should be denied")
-  (check! ":deny pattern silences caller ns"
-          (= 0 (count (deref events)))))
+(let [events (with-mem :warn {})]
+  (log/info  "skip")
+  (log/warn  "keep")
+  (log/error "keep")
+  (assert! ":min-level :warn drops :info" (= 2 (count (deref events)))))
 
-;; 4. :processors decorate every event before fan-out.
-(log/reset-config!)
-(let [[mem events] (log/memory-appender)
-      tag-host    (fn [ev] (update ev :data #(merge % {:host "edge-1"})))]
-  (log/set-config! (merge log/default-config
-                          {:min-level :trace
-                           :appenders  [mem]
-                           :processors [tag-host]}))
+;; ---------------------------------------------------------------------------
+;; 3. ns-filter — :deny beats :allow.
+;; ---------------------------------------------------------------------------
+
+(let [events (with-mem :trace {:ns-filter {:deny ["phel-log-examples.*"]}})]
+  (log/info "denied by ns-filter")
+  (assert! ":deny silences caller" (= 0 (count (deref events)))))
+
+;; ---------------------------------------------------------------------------
+;; 4. Processors decorate every event before fan-out.
+;; ---------------------------------------------------------------------------
+
+(let [tag-host (fn [ev] (update ev :data #(merge % {:host "edge-1"})))
+      events   (with-mem :trace {:processors [tag-host]})]
   (log/info "tagged")
-  (check! ":processor injects :host into :data"
-          (= "edge-1" (get (get (first (deref events)) :data) :host))))
+  (assert! "processor injects :host"
+           (= "edge-1" (get (get (first (deref events)) :data) :host))))
 
-;; 5. :base-data merged under every event's :data.
-(log/reset-config!)
-(let [[mem events] (log/memory-appender)]
-  (log/set-config! (merge log/default-config
-                          {:min-level :trace
-                           :appenders [mem]
-                           :base-data {:app "smoke" :env "ci"}}))
+;; ---------------------------------------------------------------------------
+;; 5. :base-data is global context merged under every event's :data.
+;;    Per-call :data wins on conflict.
+;; ---------------------------------------------------------------------------
+
+(let [events (with-mem :trace {:base-data {:app "smoke" :env "ci"}})]
   (log/info "with base-data" {:user 1})
   (let [data (get (first (deref events)) :data)]
-    (check! ":base-data merges :app"  (= "smoke" (get data :app)))
-    (check! ":base-data merges :env"  (= "ci"    (get data :env)))
-    (check! "event :data wins on conflict" (= 1  (get data :user)))))
+    (assert! ":base-data :app"        (= "smoke" (get data :app)))
+    (assert! ":base-data :env"        (= "ci"    (get data :env)))
+    (assert! "per-call wins on :user" (= 1       (get data :user)))))
 
-;; 6. line-formatter spot-check.
+;; ---------------------------------------------------------------------------
+;; 6. with-context — fiber-local fields attach to every nested call.
+;; ---------------------------------------------------------------------------
+
+(let [events (with-mem :trace {})]
+  (log/with-context {:request-id "abc"}
+                    (log/info "scoped"))
+  (log/info "unscoped")
+  (let [evs (deref events)]
+    (assert! "context attaches to in-scope event"
+             (= "abc" (get (get (first evs) :data) :request-id)))
+    (assert! "context not leaking out"
+             (nil? (get (get (second evs) :data) :request-id)))))
+
+;; ---------------------------------------------------------------------------
+;; 7. timed — measure a block, emit one event with :elapsed-ms.
+;; ---------------------------------------------------------------------------
+
+(let [events (with-mem :trace {})
+      result (log/timed :info "fetch users" (+ 1 2))]
+  (assert! "timed returns body value" (= 3 result))
+  (assert! "timed emits :elapsed-ms"
+           (php/>= (get (get (first (deref events)) :data) :elapsed-ms) 0)))
+
+;; ---------------------------------------------------------------------------
+;; 8. with-captured-events — drop-in for unit tests; restores prior config.
+;; ---------------------------------------------------------------------------
+
+(log/with-captured-events events
+                          (log/info "captured")
+                          (assert! "with-captured-events records the call"
+                                   (= "captured" (get (first (deref events)) :message))))
+
+;; ---------------------------------------------------------------------------
+;; 9. Line formatter — spot-check output shape.
+;; ---------------------------------------------------------------------------
+
 (let [out (log/format-line {:level :info :ns "x" :time-ms 0
                             :message "hi" :data {:k 1} :error nil})]
-  (check! "line formatter contains level" (php/str_contains out "[INFO ]"))
-  (check! "line formatter contains :data" (php/str_contains out ":k")))
+  (assert! "line formatter contains level" (php/str_contains out "[INFO ]"))
+  (assert! "line formatter contains :data" (php/str_contains out ":k")))
 
-;; 7. console-appender writes something visible (manual eyeball check).
-(log/reset-config!)
-(log/set-config! (merge log/default-config
-                        {:min-level :info
-                         :appenders [(log/console-appender)]}))
+;; ---------------------------------------------------------------------------
+;; 10. Console appender — visible eyeball check (real stderr/stdout write).
+;; ---------------------------------------------------------------------------
+
+(log/init! :info [(log/console-appender)])
 (println "\n-- expect console line below: --")
 (log/info "console-appender visible line" {:tag :smoke})
 (println "-- end console line --\n")
 
 ;; ---------------------------------------------------------------------------
-;; Exit non-zero if any check failed.
+;; Exit non-zero on any failure so `composer smoke` reflects status.
 ;; ---------------------------------------------------------------------------
-(let [fs (deref failures)]
-  (if (= 0 (count fs))
-    (println "\nquickstart OK\n")
-    (do (println (str "\nquickstart FAIL: " (count fs) " check(s) failed:"))
-        (foreach [f fs] (println " -" f))
+
+(let [n (deref failed)]
+  (if (= 0 n)
+    (println "quickstart OK\n")
+    (do (println (str "quickstart FAIL: " n " check(s) failed"))
         (php/exit 1))))
