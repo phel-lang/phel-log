@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "file=$(jq -r '.tool_input.file_path // empty'); case \"$file\" in *.phel) vendor/bin/phel format \"$file\" >/dev/null ;; esac"
+          }
+        ]
+      }
+    ]
+  }
+}
