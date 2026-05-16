@@ -28,6 +28,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `PHEL_LOG_MIN_LEVEL` env var stripping: level macros below the
   configured floor compile to literal `nil`, so production builds
   pay zero runtime cost for `log/trace` / `log/debug` calls.
+- `log/serialize-throwable`: convert a `\Throwable` into a plain map
+  (class, message, code, file, line, trace, bounded `:previous` chain).
+- Line formatter renders a short `| Class: message (file:line)` tag
+  for throwables; the JSON formatter embeds the full serialised map
+  including stack trace.
+- `console-appender` now accepts `:color :auto | :always | :never`
+  (default `:auto`). When auto-on, ANSI escapes are emitted only if
+  the destination stream is a TTY, so piping into files / CI buffers
+  stays plain text. Level→colour map exposed as `log/level->ansi`.
+- `log/rotating-file-appender`: append-only file appender with a
+  templated path. Substitutions `{date}`, `{hour}`, `{ns}`, `{level}`
+  resolve per event from the event's `:time-ms`, so daily / hourly
+  rotation is just a substitution choice and back-fills land in the
+  right bucket. Parent directory is created on demand by default.
+- `log/sampler`, `log/level-sampler`, `log/rate-limiter`: stock
+  processors for high-volume pipelines. A processor returning `nil`
+  now short-circuits the chain and drops the event before any
+  appender runs.
+- `log/make-psr-logger`: returns a `Phel\PhelLog\PsrLogger` wired
+  straight into `log-event!`. PHP frameworks no longer need to
+  hand-roll a dispatcher closure.
+- `log/with-captured-events`: scoped memory appender for tests.
+  Snapshots the current config, installs a memory appender, runs
+  the body, restores the config in a `finally`.
 
 ### Changed
 - `emit!` skips event construction entirely when no appender accepts

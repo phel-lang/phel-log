@@ -16,9 +16,16 @@ An appender is a map. Write your own by returning a map of the same shape.
 ```phel
 (log/console-appender)
 (log/console-appender {:formatter :json :min-level :warn})
+(log/console-appender {:color :always})   ; force ANSI colours
+(log/console-appender {:color :never})    ; force plain text
 ```
 
 `:info` and quieter go to `stdout`. `:warn` and louder go to `stderr`.
+
+`:color` defaults to `:auto`, which emits ANSI escapes only when the
+destination stream is a TTY — so piping into a file or CI capture stays
+plain text. Per-level colours live in `log/level->ansi`; override the map
+to pick your own palette.
 
 ### `file-appender`
 
@@ -29,8 +36,26 @@ An appender is a map. Write your own by returning a map of the same shape.
                     :min-level :report})
 ```
 
-Append-only, `LOCK_EX` on each write. No rotation; use `logrotate` or pair
-with the Monolog `RotatingFileHandler` via the bridge.
+Append-only, `LOCK_EX` on each write. No rotation; use `logrotate`,
+`rotating-file-appender` below, or pair with the Monolog
+`RotatingFileHandler` via the bridge.
+
+### `rotating-file-appender`
+
+```phel
+(log/rotating-file-appender
+  {:path-template "/var/log/my-app/{date}/{level}.log"})
+
+(log/rotating-file-appender
+  {:path-template "/var/log/my-app/{date}-{hour}.log"
+   :formatter     :json})
+```
+
+The path template is rendered per event from the event's `:time-ms`,
+not the host wall-clock. Substitutions: `{date}` (UTC `YYYY-MM-DD`),
+`{hour}` (UTC `HH`), `{ns}` (caller namespace), `{level}` (lowercase
+level name). Parent directories are created on demand; pass
+`:ensure-dir? false` to skip the `mkdir`.
 
 ### `memory-appender`
 

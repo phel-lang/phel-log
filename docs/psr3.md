@@ -6,6 +6,28 @@ appenders, processors, and config.
 
 ## Wire it up
 
+The shortest path is `log/make-psr-logger`, which builds a configured
+`PsrLogger` whose dispatcher already forwards into `log-event!`:
+
+```phel
+(ns my-app.bootstrap
+  (:require phel.log :as log))
+
+(def $logger (log/make-psr-logger "my-app"))
+```
+
+Then expose it to PHP however your container expects:
+
+```php
+use Psr\Log\LoggerInterface;
+$container->set(LoggerInterface::class, my_app_bootstrap_logger());
+```
+
+### Manual wiring
+
+If you need a custom dispatcher (extra ns mapping, side-effects, batching),
+construct `PsrLogger` directly:
+
 ```php
 use Phel\PhelLog\PsrLogger;
 use Psr\Log\LoggerInterface;

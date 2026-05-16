@@ -40,10 +40,34 @@ Wildcards apply to the call-site namespace string.
 
 ## `:processors`
 
-Each processor is `(fn [event] event)`. Run in order, before fan-out to
-appenders. Use for: masking secrets, attaching trace IDs, sampling, dropping
-events (`(fn [ev] (if (drop? ev) nil ev))` — `nil` is currently still
-written; filter via `:ns-filter` or per-appender `:min-level` instead).
+Each processor is `(fn [event] event-or-nil)`. Run in order, before fan-out
+to appenders. Returning `nil` short-circuits the chain and drops the event
+before any appender runs — ideal for sampling and rate-limiting.
+
+Stock processors:
+
+```phel
+;; keep 5% of events
+(log/sampler 0.05)
+
+;; sample only at-or-below :debug; :info+ always pass
+(log/level-sampler :debug 0.1)
+
+;; at most 100 events per second per :ns (override key via :key-fn)
+(log/rate-limiter 100)
+(log/rate-limiter 5 {:key-fn #(get % :message)})
+```
+
+Custom example:
+
+```phel
+(defn mask-secrets [event]
+  (let [masked (-> (get event :data {})
+                   (assoc :token "<redacted>"))]
+    (assoc event :data masked)))
+
+(log/update-config! {:processors [mask-secrets (log/rate-limiter 50)]})
+```
 
 ## `:base-data`
 

@@ -79,7 +79,21 @@ A bare `\Throwable` as the second arg is auto-wrapped into `{:error e}`:
 ;; with the throwable if the body throws.
 ```
 
-## 7. Strip levels at compile time
+## 7. Test what gets logged
+
+`with-captured-events` swaps in a memory appender for the duration of
+its body and restores the previous config on exit — perfect for
+asserting against log output from a unit test:
+
+```phel
+(deftest test-payment-failure-is-logged
+  (log/with-captured-events events
+    (charge-card bad-card)
+    (is (= 1 (count (deref events))))
+    (is (= :error (get (first (deref events)) :level)))))
+```
+
+## 8. Strip levels at compile time
 
 Set `PHEL_LOG_MIN_LEVEL` before building. Any `log/<level>` call below
 the threshold compiles to `nil` and pays zero runtime cost:
