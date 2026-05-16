@@ -38,26 +38,22 @@
   (php/fwrite stream (str line "\n")))
 
 (defn console-appender
-  "Write to STDOUT for :info and below, STDERR for :warn and above.
+  "Write to stdout for :info and below, stderr for :warn and above.
+   Uses `php://stdout` / `php://stderr` via `fopen` so it works under
+   CGI / phpunit isolation where the `STDOUT` / `STDERR` constants are
+   not defined.
    Options: :formatter (default :line), :min-level (optional)."
   ([] (console-appender {}))
   ([opts]
    (merge {:name      :console
            :formatter :line
            :write!    (fn [event line]
-                        (let [stream (if (level<= :warn (get event :level))
-                                       (php/-> \STDERR)
-                                       (php/-> \STDOUT))]
-                          ;; Fall back to fopen(php://stderr) when constants
-                          ;; aren't available (CGI / phpunit isolation).
-                          (write-stream!
-                            (or (and (php/defined "STDOUT") stream)
-                                (php/fopen
-                                  (if (level<= :warn (get event :level))
-                                    "php://stderr"
-                                    "php://stdout")
-                                  "w"))
-                            line)))}
+                        (let [target (if (level<= :warn (get event :level))
+                                       "php://stderr"
+                                       "php://stdout")
+                              stream (php/fopen target "w")]
+                          (write-stream! stream line)
+                          (php/fclose stream)))}
           opts)))
 
 ;; ---------------------------------------------------------------------------
@@ -75,10 +71,13 @@
   (merge {:name      :file
           :formatter :line
           :write!    (fn [event line]
+                       ;; FILE_APPEND (8) | LOCK_EX (2) = 10. Hard-coded so
+                       ;; the appender works in CLI and FPM environments
+                       ;; where the constants resolve differently.
                        (php/file_put_contents
                          (get opts :path)
                          (str line "\n")
-                         (php/| (php/-> \FILE_APPEND) (php/-> \LOCK_EX))))}
+                         10))}
          opts))
 
 ;; ---------------------------------------------------------------------------
@@ -94,6 +93,6 @@
          appender    (merge {:name      :memory
                              :formatter :line
                              :write!    (fn [event _line]
-                                          (swap! events-atom #(php/array_merge % [event])))}
+                                          (swap! events-atom #(push % event)))}
                             opts)]
      [appender events-atom])))

@@ -9,10 +9,10 @@
 ;; Same-namespace multi-file split mirrors phel.core / phel.sql.
 ;; ===========================================================================
 
-(declare make-event [level ns-str message data])
-(declare emit! [event])
-(declare passes-filter? [ns-str cfg])
-(declare apply-processors [event processors])
+(declare make-event)
+(declare emit!)
+(declare passes-filter?)
+(declare apply-processors)
 
 ;; Order matters: later files reference earlier ones at call time, so any
 ;; ordering works in principle, but reading top-to-bottom should be coherent.

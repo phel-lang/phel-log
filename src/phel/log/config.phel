@@ -65,12 +65,16 @@
   "True iff `ns-str` matches any pattern in `patterns`."
   [patterns ns-str]
   (let [pats (or patterns [])]
-    (php/boolval
-      (php/array_reduce
-        pats
-        (fn [hit pattern]
-          (if hit hit (php/preg_match (pattern->regex pattern) ns-str)))
-        false))))
+    (truthy?
+      (some (fn [pattern]
+              (php/== 1 (php/preg_match (pattern->regex pattern) ns-str)))
+            pats))))
+
+(defn- empty-coll?
+  "True iff `coll` is nil or has count 0. Avoids PHP's `empty()` language
+   construct, which Phel cannot invoke directly."
+  [coll]
+  (or (nil? coll) (php/== 0 (count coll))))
 
 (defn passes-filter?
   "True iff `ns-str` passes the configured :ns-filter.
@@ -80,5 +84,5 @@
     (cond
       (nil? f) true
       (matches-any? (get f :deny) ns-str) false
-      (php/empty (get f :allow))          true
+      (empty-coll? (get f :allow))        true
       :else (matches-any? (get f :allow) ns-str))))

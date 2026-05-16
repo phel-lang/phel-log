@@ -15,7 +15,8 @@
     (is (php/str_contains out "[INFO ]"))
     (is (php/str_contains out "my-app.users"))
     (is (php/str_contains out "user logged in"))
-    (is (php/str_contains out "2026-"))))
+    ;; Fixture's :time-ms is 2024-05-16T08:00:00.123Z.
+    (is (php/str_contains out "2024-"))))
 
 (deftest test-line-formatter-renders-data-when-not-empty
   (let [out (log/format-line (merge (fixed-event) {:data {:k 1}}))]
