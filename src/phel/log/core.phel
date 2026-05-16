@@ -83,13 +83,20 @@
          (passes-filter? ns-str cfg))))
 
 (defn apply-processors
-  "Run each processor `(fn [event] event)` left-to-right over `event`."
+  "Run each processor `(fn [event] event-or-nil)` left-to-right. A
+   processor that returns `nil` short-circuits the chain: subsequent
+   processors are skipped and `emit!` will drop the event before any
+   appender writes."
   [event processors]
-  (reduce (fn [ev proc] (proc ev)) event (or processors [])))
+  (reduce (fn [ev proc]
+            (if (nil? ev) ev (proc ev)))
+          event
+          (or processors [])))
 
 (defn emit!
   "Build, decorate, and dispatch an event. Internal: macros call this.
-   `data` may be a map or a bare \\Throwable (auto-wrapped to {:error e})."
+   `data` may be a map or a bare \\Throwable (auto-wrapped to {:error e}).
+   A processor returning nil drops the event before any appender runs."
   [level ns-str message data]
   (let [cfg       (get-config)
         appenders (get cfg :appenders)]
@@ -101,8 +108,9 @@
             merged (merge base ctx (normalise-data data))
             event  (make-event level ns-str message merged)
             procd  (apply-processors event (get cfg :processors))]
-        (foreach [appender appenders]
-          (write-event! appender procd))))))
+        (when (not (nil? procd))
+          (foreach [appender appenders]
+            (write-event! appender procd)))))))
 
 (defn log-event!
   "Direct entrypoint for non-macro callers (PSR-3 adapter, tests).
@@ -247,3 +255,53 @@
              (emit! :error ~*ns* ~message
                     {:elapsed-ms ~elapsed :error ~e-sym})
              (throw ~e-sym)))))))
+
+;; ---------------------------------------------------------------------------
+;; make-psr-logger: produce a PSR-3 LoggerInterface wired straight into
+;; the live phel.log pipeline. Removes the dispatcher-callback
+;; boilerplate every PHP framework integration needs.
+;;
+;;   (def $log (log/make-psr-logger "my-app.users"))
+;;   (php/-> $log (info "user signed up" (php/array)))
+;; ---------------------------------------------------------------------------
+
+(defn make-psr-logger
+  "Return a `Phel\\PhelLog\\PsrLogger` whose dispatcher forwards every
+   PSR-3 call into `log-event!`. `channel` becomes the default :ns for
+   events whose context lacks an explicit `_ns` override."
+  ([] (make-psr-logger "psr"))
+  ([channel]
+   (php/new \Phel\PhelLog\PsrLogger
+            (fn [level message context]
+              (let [ns-str (or (php/aget context "_ns") channel)]
+                (log-event! (keyword level) ns-str message context)))
+            channel)))
+
+;; ---------------------------------------------------------------------------
+;; with-captured-events: scoped memory appender for tests. Snapshots
+;; the current config, swaps in a single memory appender, runs `body`,
+;; restores the config in a `finally`. Binds `events-sym` to the
+;; capturing atom inside the body.
+;;
+;;   (log/with-captured-events events
+;;     (do-thing)
+;;     (is (= 1 (count (deref events)))))
+;; ---------------------------------------------------------------------------
+
+(defmacro with-captured-events
+  "Run `body` with a single in-memory appender installed and the global
+   :min-level lowered to :trace. `events-sym` is bound to the events
+   atom so assertions can deref it inside the body. Restores the prior
+   config in a `finally` even if `body` throws."
+  [events-sym & body]
+  (let [prev-sym (gensym "prev-cfg__")
+        app-sym  (gensym "app__")]
+    `(let [~prev-sym       (get-config)
+           [~app-sym ~events-sym] (memory-appender)]
+       (try
+         (set-config! (merge default-config
+                             {:min-level :trace
+                              :appenders [~app-sym]}))
+         ~@body
+         (finally
+           (set-config! ~prev-sym))))))

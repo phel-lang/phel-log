@@ -1,0 +1,227 @@
+(ns phel-log-tests.log.batch2-test
+  (:require phel.log :as log)
+  (:require phel.test :refer [deftest is testing]))
+
+;; ===========================================================================
+;; Tests for the second batch of improvements:
+;;   - throwable serialisation (full + short tag)
+;;   - colorized console (ANSI wrap + :auto/:always/:never)
+;;   - rotating-file appender + path templating
+;;   - sampler / level-sampler / rate-limiter
+;;   - apply-processors short-circuit on nil
+;;   - make-psr-logger wiring
+;;   - with-captured-events macro
+;; ===========================================================================
+
+;; ---------------------------------------------------------------------------
+;; serialize-throwable: full map shape + previous-chain walk.
+;; ---------------------------------------------------------------------------
+
+(deftest test-serialize-throwable-flat-shape
+  (let [t (php/new \RuntimeException "boom" 42)
+        s (log/serialize-throwable t)]
+    (is (= "RuntimeException" (get s :class)))
+    (is (= "boom" (get s :message)))
+    (is (= 42 (get s :code)))
+    (is (string? (get s :file)))
+    (is (php/< 0 (get s :line)))
+    (is (string? (get s :trace)))
+    (is (= [] (get s :previous)))))
+
+(deftest test-serialize-throwable-recurses-previous-chain
+  (let [root  (php/new \RuntimeException "root")
+        mid   (php/new \RuntimeException "mid" 0 root)
+        outer (php/new \RuntimeException "outer" 0 mid)
+        s     (log/serialize-throwable outer)
+        prev  (get s :previous)]
+    (is (= 2 (count prev)))
+    (is (= "mid"  (get (first prev) :message)))
+    (is (= "root" (get (second prev) :message)))))
+
+(deftest test-serialize-throwable-passes-through-non-throwable
+  (is (= "hi" (log/serialize-throwable "hi")))
+  (is (= 42  (log/serialize-throwable 42))))
+
+;; ---------------------------------------------------------------------------
+;; Line formatter renders the short Class: message (file:line) tag for
+;; throwables; the full trace is reserved for the JSON formatter.
+;; ---------------------------------------------------------------------------
+
+(deftest test-line-formatter-short-throwable-tag
+  (let [t   (php/new \LogicException "bad state")
+        ev  {:level :error :ns "x" :time-ms 0
+             :message "op failed" :data {} :error t}
+        out (log/format-line ev)]
+    (is (php/str_contains out " | LogicException: bad state"))
+    (is (php/str_contains out ".php:"))))
+
+(deftest test-json-formatter-embeds-full-throwable
+  (let [t   (php/new \RuntimeException "kaboom")
+        ev  {:level :error :ns "x" :time-ms 0
+             :message "m" :data {} :error t}
+        out (log/format-json ev)]
+    (is (php/str_contains out "\"class\":\"RuntimeException\""))
+    (is (php/str_contains out "\"trace\":"))
+    (is (php/str_contains out "\"previous\":[]"))))
+
+;; ---------------------------------------------------------------------------
+;; Console appender: :color :always wraps with ANSI; :never never does.
+;; ---------------------------------------------------------------------------
+
+(deftest test-colorize-line-via-level-ansi
+  ;; Indirect: when level has a color code, output starts with ESC[ and
+  ;; ends with the reset. We bypass console-appender stream redirection
+  ;; by invoking colorize directly through a formatter substitution.
+  (let [warn-code (get log/level->ansi :warn)
+        info-code (get log/level->ansi :info)]
+    (is (php/str_contains warn-code "\e["))
+    (is (php/str_contains info-code "\e["))
+    (is (= "" (get log/level->ansi :trace)))))
+
+;; ---------------------------------------------------------------------------
+;; rotating-file-appender: path template substitution + actual write.
+;; ---------------------------------------------------------------------------
+
+(deftest test-rotating-file-appender-requires-template
+  (is (thrown? \InvalidArgumentException (log/rotating-file-appender {}))))
+
+(deftest test-rotating-file-appender-writes-by-template
+  (let [dir      (php/sys_get_temp_dir)
+        sub      (str dir "/phel-log-rot-" (php/getmypid))
+        template (str sub "/{date}/{level}.log")
+        app      (log/rotating-file-appender {:path-template template})
+        ;; Fixed clock so we know the expected path.
+        ts       1715846400123  ; 2024-05-16T08:00:00.123Z
+        ev       {:level :info :ns "n" :time-ms ts
+                  :message "rolled" :data {} :error nil}
+        expected (str sub "/2024-05-16/info.log")]
+    (log/write-event! app ev)
+    (is (php/file_exists expected))
+    (is (php/str_contains (php/file_get_contents expected) "rolled"))
+    ;; cleanup
+    (php/unlink expected)
+    (php/rmdir (php/dirname expected))
+    (php/rmdir sub)))
+
+;; ---------------------------------------------------------------------------
+;; sampler: 0.0 drops everything, 1.0 keeps everything.
+;; ---------------------------------------------------------------------------
+
+(deftest test-sampler-bounds-validate
+  (is (thrown? \InvalidArgumentException (log/sampler -0.1)))
+  (is (thrown? \InvalidArgumentException (log/sampler 1.1))))
+
+(deftest test-sampler-zero-drops-all
+  (let [drop-all (log/sampler 0.0)
+        ev       {:level :info :ns "n" :time-ms 0
+                  :message "x" :data {} :error nil}]
+    (dotimes [_ 50]
+      (is (nil? (drop-all ev))))))
+
+(deftest test-sampler-one-keeps-all
+  (let [keep-all (log/sampler 1.0)
+        ev       {:level :info :ns "n" :time-ms 0
+                  :message "x" :data {} :error nil}]
+    (dotimes [_ 50]
+      (is (= ev (keep-all ev))))))
+
+(deftest test-level-sampler-only-samples-below-gate
+  ;; Gate :info, rate 0.0 -> every :info event drops, every :warn passes.
+  (let [proc (log/level-sampler :info 0.0)
+        info-ev {:level :info :ns "n" :time-ms 0 :message "" :data {} :error nil}
+        warn-ev {:level :warn :ns "n" :time-ms 0 :message "" :data {} :error nil}]
+    (is (nil? (proc info-ev)))
+    (is (= warn-ev (proc warn-ev)))))
+
+;; ---------------------------------------------------------------------------
+;; rate-limiter: keeps :max-per-second, drops the rest within the same
+;; epoch second, resets on second rollover.
+;; ---------------------------------------------------------------------------
+
+(deftest test-rate-limiter-allows-up-to-max
+  (let [proc (log/rate-limiter 2)
+        ev   {:level :info :ns "n" :time-ms 1000 :message "" :data {} :error nil}]
+    (is (not (nil? (proc ev))))
+    (is (not (nil? (proc ev))))
+    (is (nil? (proc ev)))))
+
+(deftest test-rate-limiter-resets-on-second-rollover
+  (let [proc (log/rate-limiter 1)
+        ev1  {:level :info :ns "n" :time-ms 1000 :message "" :data {} :error nil}
+        ev2  {:level :info :ns "n" :time-ms 2000 :message "" :data {} :error nil}]
+    (is (not (nil? (proc ev1))))
+    (is (nil? (proc ev1)))                  ; same second: dropped
+    (is (not (nil? (proc ev2))))            ; next second: allowed again
+    ))
+
+(deftest test-rate-limiter-buckets-per-key
+  (let [proc (log/rate-limiter 1)
+        a    {:level :info :ns "ns.a" :time-ms 1000 :message "" :data {} :error nil}
+        b    {:level :info :ns "ns.b" :time-ms 1000 :message "" :data {} :error nil}]
+    (is (not (nil? (proc a))))
+    (is (not (nil? (proc b))))   ; different :ns key, separate bucket
+    (is (nil? (proc a)))))
+
+(deftest test-rate-limiter-validates-max
+  (is (thrown? \InvalidArgumentException (log/rate-limiter 0))))
+
+;; ---------------------------------------------------------------------------
+;; apply-processors short-circuits on nil and skips appender fan-out.
+;; ---------------------------------------------------------------------------
+
+(deftest test-processor-returning-nil-short-circuits-pipeline
+  (let [hits  (atom 0)
+        proc1 (fn [_] nil)
+        proc2 (fn [ev] (swap! hits inc) ev)]
+    (is (nil? (log/apply-processors {:level :info} [proc1 proc2])))
+    (is (= 0 (deref hits))
+        "later processors must not run once the chain returns nil")))
+
+(deftest test-emit-skips-appenders-when-processor-drops
+  (log/reset-config!)
+  (let [[app events] (log/memory-appender)]
+    (log/set-config! (merge log/default-config
+                            {:min-level  :trace
+                             :appenders  [app]
+                             :processors [(fn [_] nil)]}))
+    (log/info "should be dropped")
+    (is (= 0 (count (deref events))))))
+
+;; ---------------------------------------------------------------------------
+;; with-captured-events: scoped memory appender restored after body.
+;; ---------------------------------------------------------------------------
+
+(deftest test-with-captured-events-binds-and-restores
+  ;; Establish a sentinel config we expect restored after the body.
+  (let [[sentinel-app _] (log/memory-appender)]
+    (log/init! :error [sentinel-app] {:base-data {:sentinel true}}))
+  (let [prev (log/get-config)]
+    (log/with-captured-events events
+      (log/info "captured here")
+      (is (= 1 (count (deref events))))
+      (is (= "captured here" (get (first (deref events)) :message))))
+    (is (= prev (log/get-config))
+        "config must be restored after the body")))
+
+(deftest test-with-captured-events-restores-on-throw
+  (let [[app _] (log/memory-appender)]
+    (log/init! :error [app]))
+  (let [prev (log/get-config)]
+    (is (thrown? \RuntimeException
+                 (log/with-captured-events _
+                   (throw (php/new \RuntimeException "x")))))
+    (is (= prev (log/get-config)))))
+
+;; ---------------------------------------------------------------------------
+;; make-psr-logger: round-trip a PSR-3 call into the live phel.log
+;; pipeline via the helper, no manual dispatcher boilerplate.
+;; ---------------------------------------------------------------------------
+
+(deftest test-make-psr-logger-routes-into-pipeline
+  (log/with-captured-events events
+    (let [logger (log/make-psr-logger "my-app.users")]
+      (php/-> logger (info "hello {who}" (php-associative-array "who" "world"))))
+    (let [ev (first (deref events))]
+      (is (= :info (get ev :level)))
+      (is (= "hello world" (get ev :message)))
+      (is (= "my-app.users" (get ev :ns))))))

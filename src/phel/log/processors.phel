@@ -1,0 +1,76 @@
+(in-ns phel.log)
+
+;; ===========================================================================
+;; Stock processors. A processor is `(fn [event] event-or-nil)`. Returning
+;; `nil` drops the event: `apply-processors` short-circuits on nil and
+;; `emit!` skips the appender fan-out. No exceptions involved, so the
+;; hot path stays cheap.
+;;
+;; Add processors via:
+;;   (log/update-config! {:processors [proc1 proc2 ...]})
+;; ===========================================================================
+
+;; ---------------------------------------------------------------------------
+;; Sampler: keep `rate` fraction of events. 1.0 = pass-through,
+;; 0.0 = drop all. Uses PHP's `mt_rand` for speed; not cryptographic.
+;; ---------------------------------------------------------------------------
+
+(defn sampler
+  "Return a processor that keeps `rate` (0.0-1.0) of events and drops
+   the rest by returning nil. Use to tame high-volume :trace / :debug
+   streams without raising the global :min-level."
+  [rate]
+  ;; Float literals on both sides of the comparison stop Phel from
+  ;; type-inferring `rate` as int, which would make PHP 8.4 deprecate
+  ;; float arguments at the boundary.
+  (when (or (php/< rate 0.0) (php/< 1.0 rate))
+    (throw (php/new \InvalidArgumentException
+                    (str "sampler rate must be in [0, 1], got " rate))))
+  (let [bound (php/intval (php/* rate (php/mt_getrandmax)))]
+    (fn [event]
+      (when (php/<= (php/mt_rand) bound) event))))
+
+(defn level-sampler
+  "Sample only events at-or-below `gate` level; events louder than
+   `gate` always pass. Lets you sample :debug noise while keeping
+   every :warn / :error event."
+  [gate rate]
+  (let [keep? (sampler rate)]
+    (fn [event]
+      (if (level<= (get event :level) gate)
+        (keep? event)
+        event))))
+
+;; ---------------------------------------------------------------------------
+;; Rate limiter: drop events when a sliding window's count exceeds
+;; `max-per-second`. Per-key bucketing via `key-fn` (default :ns) lets
+;; a noisy module starve itself without taking down quieter ones.
+;; ---------------------------------------------------------------------------
+
+(defn rate-limiter
+  "Return a processor that allows at most `max-per-second` events per
+   key (default: :ns). Excess events are dropped. State is held in a
+   closed-over atom: one limiter per processor instance.
+
+   Options:
+     :max-per-second   integer, required positional
+     :key-fn           (fn [event] key) — default `#(get % :ns)`"
+  ([max-per-second]
+   (rate-limiter max-per-second {}))
+  ([max-per-second opts]
+   (when (php/< max-per-second 1)
+     (throw (php/new \InvalidArgumentException
+                     ":max-per-second must be >= 1")))
+   (let [key-fn (get opts :key-fn (fn [ev] (get ev :ns)))
+         state  (atom {})]
+     (fn [event]
+       (let [k       (key-fn event)
+             now-s   (php/intdiv (get event :time-ms) 1000)
+             current (get (deref state) k {:second now-s :count 0})
+             same?   (php/=== (get current :second) now-s)
+             updated (if same?
+                       {:second now-s :count (php/+ 1 (get current :count))}
+                       {:second now-s :count 1})]
+         (swap! state #(assoc % k updated))
+         (when (php/<= (get updated :count) max-per-second)
+           event))))))

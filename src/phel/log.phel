@@ -22,4 +22,5 @@
 (load "log/appender")
 (load "log/monolog")
 (load "log/config")
+(load "log/processors")
 (load "log/core")
