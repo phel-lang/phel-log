@@ -1,0 +1,165 @@
+(ns phel-log-tests.log.improvements-test
+  (:require phel.log :as log)
+  (:require phel.test :refer [deftest is testing]))
+
+;; ===========================================================================
+;; Tests for perf + DX additions: init!, with-context, timed, throwable
+;; auto-wrap, regex cache, compile-time level threshold.
+;; ===========================================================================
+
+(defn- with-mem [opts]
+  (log/reset-config!)
+  (let [[app events] (log/memory-appender)]
+    (log/set-config! (merge log/default-config
+                            {:min-level :trace
+                             :appenders [app]}
+                            opts))
+    events))
+
+;; ---------------------------------------------------------------------------
+;; init! collapses reset + set-config into one call.
+;; ---------------------------------------------------------------------------
+
+(deftest test-init-sets-min-level-and-appenders
+  (let [[app events] (log/memory-appender)]
+    (log/init! :warn [app])
+    (log/info  "skip")
+    (log/warn  "keep")
+    (log/error "keep")
+    (is (= 2 (count (deref events))))
+    (is (= :warn (get (log/get-config) :min-level)))))
+
+(deftest test-init-merges-opts
+  (let [[app _] (log/memory-appender)]
+    (log/init! :info [app] {:base-data {:app "x"}
+                            :ns-filter {:allow ["foo.*"]}})
+    (let [cfg (log/get-config)]
+      (is (= "x" (get (get cfg :base-data) :app)))
+      (is (= ["foo.*"] (get (get cfg :ns-filter) :allow))))))
+
+;; ---------------------------------------------------------------------------
+;; with-context pushes a fiber-local context frame merged below :data.
+;; ---------------------------------------------------------------------------
+
+(deftest test-with-context-attaches-fields-to-events
+  (let [events (with-mem {})]
+    (log/with-context {:request-id "abc"}
+      (log/info "inside"))
+    (log/info "outside")
+    (let [evs (deref events)]
+      (is (= "abc" (get (get (first evs) :data) :request-id)))
+      (is (nil? (get (get (second evs) :data) :request-id))))))
+
+(deftest test-nested-with-context-inner-overrides-outer
+  (let [events (with-mem {})]
+    (log/with-context {:request-id "outer" :region "eu"}
+      (log/with-context {:request-id "inner"}
+        (log/info "deep")))
+    (let [data (get (first (deref events)) :data)]
+      (is (= "inner" (get data :request-id)))
+      (is (= "eu"    (get data :region))))))
+
+(deftest test-per-call-data-wins-over-context
+  (let [events (with-mem {})]
+    (log/with-context {:k :from-ctx}
+      (log/info "x" {:k :from-call})))
+  ;; events captured in previous binding scope's atom — re-bind cleanly:
+  (let [events (with-mem {})]
+    (log/with-context {:k :from-ctx}
+      (log/info "x" {:k :from-call}))
+    (is (= :from-call (get (get (first (deref events)) :data) :k)))))
+
+;; ---------------------------------------------------------------------------
+;; timed emits a single event with :elapsed-ms; errors re-throw and log.
+;; ---------------------------------------------------------------------------
+
+(deftest test-timed-emits-event-with-elapsed-ms
+  (let [events (with-mem {})
+        result (log/timed :info "work" (+ 1 2))]
+    (is (= 3 result))
+    (let [ev (first (deref events))]
+      (is (= :info (get ev :level)))
+      (is (= "work" (get ev :message)))
+      (is (php/>= (get (get ev :data) :elapsed-ms) 0)))))
+
+(deftest test-timed-rethrows-and-logs-error-on-throw
+  (let [events (with-mem {})]
+    (is (thrown? \RuntimeException
+                 (log/timed :info "boom"
+                   (throw (php/new \RuntimeException "x")))))
+    (let [ev (first (deref events))]
+      (is (= :error (get ev :level)))
+      (is (php/is_a (get (get ev :data) :error) \Throwable))
+      (is (php/>= (get (get ev :data) :elapsed-ms) 0)))))
+
+;; ---------------------------------------------------------------------------
+;; Throwable auto-wrap: macros accept a bare \Throwable as second arg.
+;; ---------------------------------------------------------------------------
+
+(deftest test-error-macro-accepts-bare-throwable
+  (let [events (with-mem {})
+        err    (php/new \RuntimeException "kaboom")]
+    (log/error "failed" err)
+    (let [ev (first (deref events))]
+      (is (php/is_a (get ev :error) \Throwable))
+      (is (= "kaboom" (php/-> (get ev :error) (getMessage)))))))
+
+(deftest test-info-macro-accepts-bare-throwable
+  (let [events (with-mem {})
+        err    (php/new \LogicException "lo")]
+    (log/info "weird" err)
+    (is (= "lo" (php/-> (get (first (deref events)) :error) (getMessage))))))
+
+;; ---------------------------------------------------------------------------
+;; Pre-filter appenders: when no appender accepts, event is not built
+;; (observable indirectly via a processor that records each invocation).
+;; ---------------------------------------------------------------------------
+
+(deftest test-emit-skips-event-build-when-no-appender-accepts
+  (log/reset-config!)
+  (let [[noisy _] (log/memory-appender {:min-level :fatal})
+        proc-hits (atom 0)
+        proc      (fn [ev] (swap! proc-hits inc) ev)]
+    (log/set-config! (merge log/default-config
+                            {:min-level  :trace
+                             :appenders  [noisy]
+                             :processors [proc]}))
+    (log/info "skipped because :fatal appender won't accept")
+    (is (= 0 (deref proc-hits))
+        "processor must not run when no appender accepts the level")))
+
+;; ---------------------------------------------------------------------------
+;; Compile-time threshold function reads env or falls back to :trace.
+;; ---------------------------------------------------------------------------
+
+(deftest test-compile-time-min-level-defaults-to-trace
+  (php/putenv "PHEL_LOG_MIN_LEVEL=")
+  (is (= :trace (log/compile-time-min-level))))
+
+(deftest test-compile-time-min-level-honours-env
+  (php/putenv "PHEL_LOG_MIN_LEVEL=warn")
+  (is (= :warn (log/compile-time-min-level)))
+  (php/putenv "PHEL_LOG_MIN_LEVEL="))
+
+(deftest test-compile-time-min-level-rejects-garbage
+  (php/putenv "PHEL_LOG_MIN_LEVEL=zzz")
+  (is (= :trace (log/compile-time-min-level)))
+  (php/putenv "PHEL_LOG_MIN_LEVEL="))
+
+;; ---------------------------------------------------------------------------
+;; Regex cache: same pattern reused = same compiled regex returned.
+;; Observable via passes-filter? returning the same boolean repeatedly
+;; under heavy load (smoke check; we mostly want to know the helper
+;; doesn't break correctness).
+;; ---------------------------------------------------------------------------
+
+(deftest test-ns-filter-still-correct-after-many-calls
+  (let [cfg {:ns-filter {:allow ["my-app.**"]
+                         :deny  ["my-app.noisy.*"]}}]
+    (is (log/passes-filter? "my-app.api" cfg))
+    (is (log/passes-filter? "my-app.api.controllers" cfg))
+    (is (not (log/passes-filter? "my-app.noisy.x" cfg)))
+    (is (not (log/passes-filter? "other.app" cfg)))
+    ;; Burn through the cache path repeatedly:
+    (dotimes [_ 100]
+      (is (log/passes-filter? "my-app.api" cfg)))))

@@ -51,8 +51,14 @@
 ;;   "my-app.**"   matches "my-app.api.controllers" (greedy)
 ;; ---------------------------------------------------------------------------
 
-(defn- pattern->regex
-  "Translate a wildcard pattern into a PHP-compatible regex.
+(def ^:private *regex-cache*
+  "Pattern -> compiled-regex memo. ns-filter patterns are typically a
+   small fixed set declared at boot, so this is a one-time cost paid
+   on the first matching call and reused for every event after."
+  (atom {}))
+
+(defn- compile-regex
+  "Translate a wildcard pattern into a PHP-compatible regex string.
    `*`  -> `[^.]+`   single segment
    `**` -> `.+`      multi-segment"
   [pattern]
@@ -60,6 +66,18 @@
         with-** (php/str_replace "\\*\\*" ".+" escaped)
         with-*  (php/str_replace "\\*"     "[^.]+" with-**)]
     (str "/^" with-* "$/")))
+
+(defn- pattern->regex
+  "Memoised `compile-regex`. Skips PHP string mangling on every event
+   when an ns-filter is configured."
+  [pattern]
+  (let [cache (deref *regex-cache*)
+        hit   (get cache pattern)]
+    (if hit
+      hit
+      (let [compiled (compile-regex pattern)]
+        (swap! *regex-cache* #(assoc % pattern compiled))
+        compiled))))
 
 (defn- matches-any?
   "True iff `ns-str` matches any pattern in `patterns`."

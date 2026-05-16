@@ -4,17 +4,79 @@
 ;; Public API: dispatch + level macros.
 ;;
 ;; A log call is:
-;;   1. enabled? check (level + ns filter)             — fast path, no alloc
-;;   2. build event map                                — single map alloc
-;;   3. run :processors over the event                 — middleware
-;;   4. fan out to every appender that accepts it      — side effects
+;;   1. compile-time elision (per-call macro check vs PHEL_LOG_MIN_LEVEL)
+;;   2. enabled? check (level + ns filter)             fast path, no alloc
+;;   3. pre-filter appenders by per-appender :min-level
+;;   4. build event map                                single map alloc
+;;   5. run :processors over the event                 middleware
+;;   6. fan out to every accepting appender            side effects
 ;;
 ;; Macros snapshot the call-site namespace at expand time (via *ns*) so the
 ;; recorded :ns is the caller's, not phel.log itself.
 ;; ===========================================================================
 
+;; ---------------------------------------------------------------------------
+;; Scoped, fiber-local context. `with-context` overlays a map between the
+;; global :base-data and the per-call :data, so request-scoped fields
+;; (request-id, user-id, trace-id, ...) attach automatically to every
+;; downstream log call without threading parameters by hand.
+;; ---------------------------------------------------------------------------
+
+(def ^:dynamic *log-context*
+  "Fiber-local context map merged into every event's :data between
+   :base-data and the per-call data. Use `with-context` to push a frame."
+  {})
+
+;; ---------------------------------------------------------------------------
+;; Compile-time level elision. Reading PHEL_LOG_MIN_LEVEL at macro-expansion
+;; time lets a production build strip `log/trace` / `log/debug` calls to
+;; literal `nil` and pay zero runtime cost. Default :trace keeps every
+;; level live for dev.
+;; ---------------------------------------------------------------------------
+
+(defn compile-time-min-level
+  "Read PHEL_LOG_MIN_LEVEL env var at macro-expansion time. Returns a
+   level keyword. Falls back to :trace when unset or unrecognised so
+   nothing is silently elided in dev."
+  []
+  (let [raw (php/getenv "PHEL_LOG_MIN_LEVEL")
+        kw  (if (and (string? raw) (php/!== raw ""))
+              (keyword (php/strtolower raw))
+              :trace)]
+    (if (get level-ranks kw) kw :trace)))
+
+(defn- throwable?
+  "True iff `x` is a PHP \\Throwable instance."
+  [x]
+  (and (not (nil? x)) (php/is_a x \Throwable)))
+
+(defn- normalise-data
+  "Accept a Throwable or a map for the per-call `data` slot. A bare
+   throwable is rewritten to `{:error e}` so `(log/error \"msg\" e)`
+   works without forcing the caller to wrap it."
+  [data]
+  (cond
+    (nil? data)       {}
+    (throwable? data) {:error data}
+    :else             data))
+
+(defn- accepts?
+  "True iff `appender` accepts an event at `level`. Per-appender
+   :min-level overrides the global one."
+  [appender level]
+  (let [floor (get appender :min-level)]
+    (or (nil? floor) (level<= floor level))))
+
+(defn- any-accepts?
+  "True iff at least one appender in `appenders` accepts an event at
+   `level`. Short-circuits on the first match so we can skip event
+   construction when no appender would write."
+  [appenders level]
+  (truthy? (some #(accepts? % level) appenders)))
+
 (defn enabled?
-  "True iff an event of `level` from `ns-str` would be written somewhere."
+  "True iff an event of `level` from `ns-str` would be written somewhere.
+   Cheap: one atom deref, one numeric compare, optional regex match."
   [level ns-str]
   (let [cfg (get-config)]
     (and (level>= level (get cfg :min-level))
@@ -26,16 +88,21 @@
   (reduce (fn [ev proc] (proc ev)) event (or processors [])))
 
 (defn emit!
-  "Build, decorate, and dispatch an event. Internal: macros call this."
+  "Build, decorate, and dispatch an event. Internal: macros call this.
+   `data` may be a map or a bare \\Throwable (auto-wrapped to {:error e})."
   [level ns-str message data]
-  (when (enabled? level ns-str)
-    (let [cfg     (get-config)
-          base    (get cfg :base-data {})
-          merged  (merge base (or data {}))
-          event   (make-event level ns-str message merged)
-          procd   (apply-processors event (get cfg :processors))]
-      (foreach [appender (get cfg :appenders)]
-        (write-event! appender procd)))))
+  (let [cfg       (get-config)
+        appenders (get cfg :appenders)]
+    (when (and (level>= level (get cfg :min-level))
+               (passes-filter? ns-str cfg)
+               (any-accepts? appenders level))
+      (let [base   (get cfg :base-data {})
+            ctx    *log-context*
+            merged (merge base ctx (normalise-data data))
+            event  (make-event level ns-str message merged)
+            procd  (apply-processors event (get cfg :processors))]
+        (foreach [appender appenders]
+          (write-event! appender procd))))))
 
 (defn log-event!
   "Direct entrypoint for non-macro callers (PSR-3 adapter, tests).
@@ -44,70 +111,87 @@
   (emit! level ns-str message data))
 
 ;; ---------------------------------------------------------------------------
+;; init!  one-call setup. Avoids the common pattern of:
+;;   (log/reset-config!)
+;;   (log/set-config! (merge log/default-config {...}))
+;; ---------------------------------------------------------------------------
+
+(defn init!
+  "Configure the logger in one call.
+   - `min-level`  level keyword
+   - `appenders`  vector of appender maps
+   - `opts`       optional map merged onto the resulting config
+                  (`:ns-filter`, `:processors`, `:base-data`)."
+  ([min-level appenders]
+   (init! min-level appenders {}))
+  ([min-level appenders opts]
+   (set-config! (merge default-config
+                       {:min-level min-level
+                        :appenders appenders}
+                       opts))))
+
+;; ---------------------------------------------------------------------------
 ;; Macros. Capture *ns* at expand time. Argument shapes accepted:
 ;;
 ;;   (log/info "message")
 ;;   (log/info "message" {:user 42})
+;;   (log/info "message" some-throwable)         ; auto-wrapped to {:error e}
 ;;   (log/info ["composite" "message" "parts"])  ; vector -> joined w/ space
 ;;   (log/info ["composite" ...] {:k :v})
+;;
+;; Each macro elides to `nil` when its level is below PHEL_LOG_MIN_LEVEL
+;; at compile time, so a prod build pays no runtime cost for stripped
+;; levels.
 ;; ---------------------------------------------------------------------------
 
-(defmacro- deflevel
-  "Define a level macro `name` that emits at `level-kw`."
-  [macro-name level-kw]
-  (let [args-sym  (gensym "args__")
-        ns-string *ns*]
-    `(defmacro ~macro-name [& ~args-sym]
-       `(emit! ~~level-kw
-               ~~ns-string
-               ~(first ~args-sym)
-               ~(second ~args-sym)))))
-
-;; Note: the macros below shadow nothing in phel.core but DO shadow common
-;; user identifiers if `:refer`red. Users should consume via alias:
-;;   (:require phel.log :as log)
-;;   (log/info "hello")
+(defn- expand-level
+  "Expand-time helper: return either an `emit!` form or `nil` depending
+   on whether `lvl` clears the compile-time threshold. Called from each
+   level macro's body."
+  [lvl caller-ns body]
+  (if (level>= lvl (compile-time-min-level))
+    `(emit! ~lvl ~caller-ns ~(first body) ~(second body))
+    nil))
 
 (defmacro trace
-  "Log at :trace level. Args: message [data-map]."
+  "Log at :trace level. Args: message [data-or-throwable]."
   [& body]
-  `(emit! :trace ~*ns* ~(first body) ~(second body)))
+  (expand-level :trace *ns* body))
 
 (defmacro debug
-  "Log at :debug level. Args: message [data-map]."
+  "Log at :debug level. Args: message [data-or-throwable]."
   [& body]
-  `(emit! :debug ~*ns* ~(first body) ~(second body)))
+  (expand-level :debug *ns* body))
 
 (defmacro info
-  "Log at :info level. Args: message [data-map]."
+  "Log at :info level. Args: message [data-or-throwable]."
   [& body]
-  `(emit! :info ~*ns* ~(first body) ~(second body)))
+  (expand-level :info *ns* body))
 
 (defmacro warn
-  "Log at :warn level. Args: message [data-map]."
+  "Log at :warn level. Args: message [data-or-throwable]."
   [& body]
-  `(emit! :warn ~*ns* ~(first body) ~(second body)))
+  (expand-level :warn *ns* body))
 
 (defmacro error
-  "Log at :error level. Args: message [data-map]."
+  "Log at :error level. Args: message [data-or-throwable]."
   [& body]
-  `(emit! :error ~*ns* ~(first body) ~(second body)))
+  (expand-level :error *ns* body))
 
 (defmacro fatal
-  "Log at :fatal level. Args: message [data-map]."
+  "Log at :fatal level. Args: message [data-or-throwable]."
   [& body]
-  `(emit! :fatal ~*ns* ~(first body) ~(second body)))
+  (expand-level :fatal *ns* body))
 
 (defmacro report
-  "Log at :report level. Args: message [data-map].
-   :report is for high-signal, audit-style events (deploys, manual ops) that
-   should always go out regardless of the current :min-level threshold in
-   most production configs."
+  "Log at :report level. Args: message [data-or-throwable].
+   :report is for high-signal, audit-style events (deploys, manual ops)
+   that should always go out regardless of the current :min-level."
   [& body]
-  `(emit! :report ~*ns* ~(first body) ~(second body)))
+  (expand-level :report *ns* body))
 
 ;; ---------------------------------------------------------------------------
-;; Convenience: timed block. Emits :info on entry/exit, :error on throw.
+;; spy: log a value at :debug and return it. Handy inside thread macros.
 ;; ---------------------------------------------------------------------------
 
 (defmacro spy
@@ -118,3 +202,48 @@
     `(let [~v-sym ~expr]
        (emit! :debug ~*ns* ["spy =>" ~v-sym] nil)
        ~v-sym)))
+
+;; ---------------------------------------------------------------------------
+;; with-context: push a frame onto *log-context* for the dynamic extent
+;; of `body`. Nested frames merge left-to-right (inner overrides outer).
+;;
+;;   (log/with-context {:request-id "abc"}
+;;     (log/info "starting work")          ; :data includes :request-id
+;;     (do-work))
+;; ---------------------------------------------------------------------------
+
+(defmacro with-context
+  "Merge `m` into *log-context* for the duration of `body`. Fiber-local."
+  [m & body]
+  `(binding [*log-context* (merge *log-context* ~m)]
+     ~@body))
+
+;; ---------------------------------------------------------------------------
+;; timed: time a block, emit a single event with :elapsed-ms in :data.
+;;
+;;   (log/timed :info "fetch users"
+;;     (db/query "SELECT ..."))
+;;
+;; Returns the value of the body. On exception, re-throws after emitting
+;; an :error event with :elapsed-ms + :error.
+;; ---------------------------------------------------------------------------
+
+(defmacro timed
+  "Time `body` and emit one event at `level` with :elapsed-ms in :data.
+   Returns body's value. Logs an :error variant if body throws."
+  [level message & body]
+  (let [start-sym  (gensym "t-start__")
+        result-sym (gensym "t-result__")
+        elapsed    (gensym "t-elapsed__")
+        e-sym      (gensym "t-err__")]
+    `(let [~start-sym (now-ms)]
+       (try
+         (let [~result-sym (do ~@body)
+               ~elapsed    (php/- (now-ms) ~start-sym)]
+           (emit! ~level ~*ns* ~message {:elapsed-ms ~elapsed})
+           ~result-sym)
+         (catch \Throwable ~e-sym
+           (let [~elapsed (php/- (now-ms) ~start-sym)]
+             (emit! :error ~*ns* ~message
+                    {:elapsed-ms ~elapsed :error ~e-sym})
+             (throw ~e-sym)))))))
