@@ -31,22 +31,75 @@
                (php/is_a data \Countable))
            (php/== 0 (php/count data)))))
 
+;; ---------------------------------------------------------------------------
+;; Throwable serialisation. Stack trace as a string keeps the JSON wire
+;; payload simple while preserving the human-readable form Monolog /
+;; PHP loggers produce. `:previous` recurses one level deep with a
+;; bounded chain length to defeat pathological exception loops.
+;; ---------------------------------------------------------------------------
+
+(def ^:private *max-previous-chain* 5)
+
+(declare serialize-throwable)
+
+(defn- previous-chain
+  "Walk `\\Throwable::getPrevious()` up to `*max-previous-chain*` deep
+   and return a vector of serialised maps."
+  [t]
+  (loop [cur   (php/-> t (getPrevious))
+         depth 0
+         acc   []]
+    (cond
+      (nil? cur)                       acc
+      (php/<= *max-previous-chain* depth) (push acc {:truncated true})
+      :else (recur (php/-> cur (getPrevious))
+                   (php/+ depth 1)
+                   (push acc (serialize-throwable cur))))))
+
+(defn serialize-throwable
+  "Convert a `\\Throwable` into a plain map: class, message, code,
+   file, line, trace (one string), and a bounded :previous chain.
+   Returns the input unchanged if it isn't a Throwable."
+  [t]
+  (if (php/is_a t \Throwable)
+    {:class    (php/get_class t)
+     :message  (php/-> t (getMessage))
+     :code     (php/-> t (getCode))
+     :file     (php/-> t (getFile))
+     :line     (php/-> t (getLine))
+     :trace    (php/-> t (getTraceAsString))
+     :previous (previous-chain t)}
+    t))
+
+(defn- short-throwable-tag
+  "Build the inline ` | Class: message (file:line)` segment for the
+   line formatter. Single short line so the event still fits on one
+   row; the full trace lives in the json formatter."
+  [t]
+  (let [klass (php/get_class t)
+        msg   (php/-> t (getMessage))
+        file  (php/basename (php/-> t (getFile)))
+        line  (php/-> t (getLine))]
+    (str " | " klass ": " msg " (" file ":" line ")")))
+
 (defn format-line
   "Line formatter: human-readable one-line representation. Suitable for the
-   console appender and most file appenders."
+   console appender and most file appenders.
+   Errors render as a short ` | Class: message (file:line)` tag."
   [event]
   (let [{:keys [level ns time-ms message data error]} event
         head (str (iso-time time-ms) " [" (pad-level level) "] " ns " - " message)
         body (if (data-empty? data) "" (str " " (print-str data)))
-        tail (if error
-               (str " | " (if (php/is_a error \Throwable)
-                            (php/-> error (getMessage))
-                            (str error)))
-               "")]
+        tail (cond
+               (nil? error)                 ""
+               (php/is_a error \Throwable)  (short-throwable-tag error)
+               :else                        (str " | " error))]
     (str head body tail)))
 
 (defn format-json
-  "JSON formatter: one event per line, machine-readable."
+  "JSON formatter: one event per line, machine-readable. Throwables are
+   serialised in full (class, message, code, file, line, trace, previous
+   chain) so log pipelines can inspect them without re-parsing."
   [event]
   (let [{:keys [level ns time-ms message data error]} event
         payload {:level   (name level)
@@ -57,10 +110,7 @@
                  :data    data
                  :error   (when error
                             (if (php/is_a error \Throwable)
-                              {:class   (php/get_class error)
-                               :message (php/-> error (getMessage))
-                               :file    (php/-> error (getFile))
-                               :line    (php/-> error (getLine))}
+                              (serialize-throwable error)
                               (str error)))}]
     (json/encode payload)))
 

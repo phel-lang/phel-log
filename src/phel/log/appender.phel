@@ -37,24 +37,68 @@
   [stream line]
   (php/fwrite stream (str line "\n")))
 
+(def level->ansi
+  "ANSI color codes per level. Empty string for :trace/:debug keeps
+   noisy levels uncoloured so the eye lands on warn+ first."
+  {:trace  ""
+   :debug  "\e[2m"          ; dim
+   :info   "\e[36m"         ; cyan
+   :warn   "\e[33m"         ; yellow
+   :error  "\e[31m"         ; red
+   :fatal  "\e[1;31m"       ; bold red
+   :report "\e[1;35m"})     ; bold magenta
+
+(def ^:private ansi-reset "\e[0m")
+
+(defn- tty?
+  "Best-effort check that `stream` is connected to a TTY. Falls back
+   to false if the host PHP build is missing `stream_isatty` so we
+   never emit garbled escape codes into log files / CI buffers."
+  [stream]
+  (and (php/function_exists "stream_isatty")
+       (php/stream_isatty stream)))
+
+(defn- colorize-line
+  "Wrap `line` in the ANSI escape for `level` plus a reset suffix.
+   Returns `line` unchanged when the level has no associated colour."
+  [level line]
+  (let [code (get level->ansi level "")]
+    (if (php/=== code "")
+      line
+      (str code line ansi-reset))))
+
 (defn console-appender
   "Write to stdout for :info and below, stderr for :warn and above.
    Uses `php://stdout` / `php://stderr` via `fopen` so it works under
    CGI / phpunit isolation where the `STDOUT` / `STDERR` constants are
    not defined.
-   Options: :formatter (default :line), :min-level (optional)."
+
+   Options:
+     :formatter  default :line
+     :min-level  per-appender threshold (optional)
+     :color      :auto (default) | :always | :never
+                 :auto colours only when stdout is a TTY, so piping
+                 into a file or CI capture stays plain text."
   ([] (console-appender {}))
   ([opts]
-   (merge {:name      :console
-           :formatter :line
-           :write!    (fn [event line]
-                        (let [target (if (level<= :warn (get event :level))
-                                       "php://stderr"
-                                       "php://stdout")
-                              stream (php/fopen target "w")]
-                          (write-stream! stream line)
-                          (php/fclose stream)))}
-          opts)))
+   (let [color-mode (get opts :color :auto)]
+     (merge {:name      :console
+             :formatter :line
+             :write!    (fn [event line]
+                          (let [target (if (level<= :warn (get event :level))
+                                         "php://stderr"
+                                         "php://stdout")
+                                stream (php/fopen target "w")
+                                use?   (cond
+                                         (= color-mode :always) true
+                                         (= color-mode :never)  false
+                                         :else                  (tty? stream))
+                                out    (if use?
+                                         (colorize-line (get event :level) line)
+                                         line)]
+                            (write-stream! stream out)
+                            (php/fclose stream)))}
+            opts))))
 
 ;; ---------------------------------------------------------------------------
 ;; File appender.
@@ -79,6 +123,59 @@
                          (str line "\n")
                          10))}
          opts))
+
+;; ---------------------------------------------------------------------------
+;; Rotating file appender. Path template substitutions are computed
+;; per event from the event's :time-ms so the rotation aligns with
+;; the event clock rather than the host wall-clock — important when
+;; back-filling old log batches.
+;;
+;;   {date}    YYYY-MM-DD     (UTC)
+;;   {hour}    HH             (UTC, 00-23)
+;;   {ns}      caller ns      (dots preserved)
+;;   {level}   lowercase level keyword name
+;; ---------------------------------------------------------------------------
+
+(defn- substitute-path
+  "Render the path template against `event`'s clock + identity fields."
+  [template event]
+  (let [time-ms (get event :time-ms)
+        secs    (php/intdiv time-ms 1000)
+        date    (php/gmdate "Y-m-d" secs)
+        hour    (php/gmdate "H"     secs)]
+    (->> template
+         (php/str_replace "{date}"  date)
+         (php/str_replace "{hour}"  hour)
+         (php/str_replace "{ns}"    (or (get event :ns) ""))
+         (php/str_replace "{level}" (name (get event :level))))))
+
+(defn- ensure-parent-dir!
+  "Create the parent directory of `path` if it's missing. Idempotent."
+  [path]
+  (let [dir (php/dirname path)]
+    (when (and dir (not (php/is_dir dir)))
+      (php/mkdir dir 0755 true))))
+
+(defn rotating-file-appender
+  "Append-only file appender with a templated path. Each event picks
+   its own file based on `:path-template`, so daily / hourly rotation
+   is just a substitution choice — no background process needed.
+
+   Required opts: :path-template (string with {date}/{hour}/{ns}/{level}).
+   Optional opts: :formatter (default :line), :min-level, :ensure-dir? (default true)."
+  [opts]
+  (let [template (get opts :path-template)]
+    (when (nil? template)
+      (throw (php/new \InvalidArgumentException
+                      "rotating-file-appender requires :path-template"))))
+  (let [ensure? (get opts :ensure-dir? true)]
+    (merge {:name      :rotating-file
+            :formatter :line
+            :write!    (fn [event line]
+                         (let [path (substitute-path (get opts :path-template) event)]
+                           (when ensure? (ensure-parent-dir! path))
+                           (php/file_put_contents path (str line "\n") 10)))}
+           opts)))
 
 ;; ---------------------------------------------------------------------------
 ;; In-memory appender. Useful for tests and the REPL.
