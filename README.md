@@ -130,11 +130,10 @@ $container->set(\Psr\Log\LoggerInterface::class, $logger);
 
 ## Docs
 
-- [Quickstart](docs/quickstart.md): smallest useful setup.
-- [Config](docs/config.md): every option in `set-config!`.
-- [Appenders](docs/appenders.md): console / file / memory / custom.
-- [Monolog bridge](docs/monolog-bridge.md): forward into Monolog handlers.
-- [PSR-3](docs/psr3.md): plug into PHP frameworks.
+Full index at [`docs/README.md`](docs/README.md) — start with
+[Quickstart](docs/quickstart.md), then [Config](docs/config.md) /
+[Appenders](docs/appenders.md). Integrations:
+[Monolog bridge](docs/monolog-bridge.md), [PSR-3](docs/psr3.md).
 
 ## Contributing
 
