@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-05-16
+
 First public release of `phel.log` — a data-driven logging library for
 Phel, inspired by Timbre and Monolog.
 
@@ -21,4 +23,5 @@ Phel, inspired by Timbre and Monolog.
 
 See [docs/](docs/) for the full API.
 
-[Unreleased]: https://github.com/phel-lang/phel-log/compare/HEAD...HEAD
+[Unreleased]: https://github.com/phel-lang/phel-log/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/phel-lang/phel-log/releases/tag/v0.1.0
