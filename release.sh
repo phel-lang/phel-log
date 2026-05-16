@@ -24,6 +24,9 @@ NEW_VERSION=""
 RELEASE_NAME=""
 DRY_RUN=0
 FORCE=0
+DRAFT=0
+SKIP_TESTS=0
+REPO_SLUG=""
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -40,9 +43,14 @@ log_warn(){ log "${YELLOW}[WARN]${NC} $*"; }
 log_err() { log "${RED}[ERR]${NC} $*" >&2; }
 
 # ---------------------------------------------------------------------------
-# Backup / rollback
+# Backup / rollback. Track which side-effects happened so EXIT can undo the
+# right subset (CHANGELOG file, release commit, local tag) when an error
+# trips mid-flow.
 # ---------------------------------------------------------------------------
 BACKUP_DIR=""
+COMMITTED=0
+TAGGED=0
+PUSHED=0
 
 cleanup_backup() {
     [[ -n "$BACKUP_DIR" && -d "$BACKUP_DIR" ]] && rm -rf "$BACKUP_DIR"
@@ -50,9 +58,26 @@ cleanup_backup() {
 }
 
 rollback() {
-    [[ -z "$BACKUP_DIR" || ! -d "$BACKUP_DIR" ]] && return 0
+    if [[ $PUSHED -eq 1 ]]; then
+        log_err "Push already completed — manual cleanup required:"
+        log_err "  git push $REMOTE :refs/tags/v$NEW_VERSION"
+        log_err "  git push $REMOTE +HEAD~1:$MAIN_BRANCH   # if main was advanced"
+        cleanup_backup
+        return 0
+    fi
     log_warn "Rolling back changes..."
-    [[ -f "$BACKUP_DIR/CHANGELOG.md" ]] && cp "$BACKUP_DIR/CHANGELOG.md" "$CHANGELOG_FILE"
+    if [[ $TAGGED -eq 1 ]]; then
+        git -C "$REPO_ROOT" tag -d "v$NEW_VERSION" >/dev/null 2>&1 \
+            && log_ok "Removed local tag v$NEW_VERSION"
+    fi
+    if [[ $COMMITTED -eq 1 ]]; then
+        git -C "$REPO_ROOT" reset --hard HEAD~1 >/dev/null 2>&1 \
+            && log_ok "Reverted release commit"
+    fi
+    if [[ -n "$BACKUP_DIR" && -f "$BACKUP_DIR/CHANGELOG.md" ]]; then
+        cp "$BACKUP_DIR/CHANGELOG.md" "$CHANGELOG_FILE"
+        log_ok "Restored CHANGELOG.md"
+    fi
     cleanup_backup
 }
 
@@ -80,6 +105,8 @@ Options:
   --name "<title>"    Release title suffix shown in GitHub (default: just vX.Y.Z)
   --dry-run           Print actions without changing files or pushing
   --force             Skip confirmation prompt
+  --skip-tests        Skip composer test + composer smoke gate (NOT recommended)
+  --draft             Create the GitHub release as a draft
   -h, --help          Show this help
 
 Examples:
@@ -109,10 +136,12 @@ compute_next_minor() {
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --dry-run) DRY_RUN=1; shift ;;
-            --force)   FORCE=1; shift ;;
-            --name)    RELEASE_NAME="${2:-}"; shift 2 ;;
-            -h|--help) show_help; exit 0 ;;
+            --dry-run)    DRY_RUN=1; shift ;;
+            --force)      FORCE=1; shift ;;
+            --skip-tests) SKIP_TESTS=1; shift ;;
+            --draft)      DRAFT=1; shift ;;
+            --name)       RELEASE_NAME="${2:-}"; shift 2 ;;
+            -h|--help)    show_help; exit 0 ;;
             -*)        log_err "Unknown flag: $1"; show_help; exit 1 ;;
             *)
                 if [[ -z "$NEW_VERSION" ]]; then
@@ -132,6 +161,24 @@ parse_args() {
 
 validate_semver() {
     [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+}
+
+# Derive "owner/repo" from origin URL. Supports ssh + https forms.
+# Falls back to phel-lang/phel-log if origin is unset or unparseable.
+detect_repo_slug() {
+    local url slug
+    url=$(git -C "$REPO_ROOT" remote get-url "$REMOTE" 2>/dev/null || true)
+    if [[ -z "$url" ]]; then
+        echo "phel-lang/phel-log"
+        return
+    fi
+    # git@github.com:owner/repo(.git) or https://github.com/owner/repo(.git)
+    slug=$(printf '%s' "$url" \
+        | sed -E 's#\.git$##' \
+        | sed -E 's#^.*github\.com[:/]##')
+    [[ -n "$slug" && "$slug" != "$url" && "$slug" == */* ]] \
+        && echo "$slug" \
+        || echo "phel-lang/phel-log"
 }
 
 # ---------------------------------------------------------------------------
@@ -193,6 +240,24 @@ check_network() {
         || { log_err "Cannot reach remote '$REMOTE'"; return 1; }
 }
 
+# Run the full test + smoke suite before tagging. Skippable via --skip-tests
+# but logs a warning so any release built without the gate is auditable.
+check_tests() {
+    if [[ $SKIP_TESTS -eq 1 ]]; then
+        log_warn "Skipping composer test + composer smoke (--skip-tests)"
+        return 0
+    fi
+    log "Running composer test..."
+    (cd "$REPO_ROOT" && composer test >/dev/null 2>&1) \
+        || { log_err "composer test failed — run 'composer test' to see output"; return 1; }
+    log_ok "composer test"
+
+    log "Running composer smoke..."
+    (cd "$REPO_ROOT" && composer smoke >/dev/null 2>&1) \
+        || { log_err "composer smoke failed — run 'composer smoke' to see output"; return 1; }
+    log_ok "composer smoke"
+}
+
 run_preflight() {
     log "\n${BOLD}Pre-flight checks${NC}"
     check_gh_cli
@@ -201,6 +266,7 @@ run_preflight() {
     check_network
     check_tag_free "$NEW_VERSION"
     check_changelog_unreleased
+    check_tests
     log_ok "All checks passed"
 }
 
@@ -226,11 +292,11 @@ update_changelog() {
 
     local compare_url
     if [[ -n "$prev_tag" ]]; then
-        compare_url="https://github.com/phel-lang/phel-log/compare/${prev_tag}...v${version}"
+        compare_url="https://github.com/${REPO_SLUG}/compare/${prev_tag}...v${version}"
     else
-        compare_url="https://github.com/phel-lang/phel-log/releases/tag/v${version}"
+        compare_url="https://github.com/${REPO_SLUG}/releases/tag/v${version}"
     fi
-    local unreleased_compare="https://github.com/phel-lang/phel-log/compare/v${version}...HEAD"
+    local unreleased_compare="https://github.com/${REPO_SLUG}/compare/v${version}...HEAD"
 
     local tmp
     tmp=$(mktemp)
@@ -289,15 +355,21 @@ confirm_release() {
 git_commit_release() {
     git -C "$REPO_ROOT" add "$CHANGELOG_FILE"
     git -C "$REPO_ROOT" commit -m "chore(release): v$NEW_VERSION"
+    COMMITTED=1
 }
 
 git_create_tag() {
     git -C "$REPO_ROOT" tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
+    TAGGED=1
 }
 
+# Atomic push: branch + tag land together or neither does. Without --atomic
+# a branch push can succeed while the tag push fails, leaving remote main
+# advanced without the corresponding tag.
 git_push() {
-    git -C "$REPO_ROOT" push "$REMOTE" "$MAIN_BRANCH"
-    git -C "$REPO_ROOT" push "$REMOTE" "v$NEW_VERSION"
+    git -C "$REPO_ROOT" push --atomic "$REMOTE" \
+        "$MAIN_BRANCH" "v$NEW_VERSION"
+    PUSHED=1
 }
 
 create_github_release() {
@@ -312,10 +384,14 @@ create_github_release() {
     notes_file=$(mktemp)
     printf '%s\n' "$notes" >"$notes_file"
 
+    local draft_flag=""
+    [[ $DRAFT -eq 1 ]] && draft_flag="--draft"
+
     gh release create "v$NEW_VERSION" \
-        --repo "phel-lang/phel-log" \
+        --repo "$REPO_SLUG" \
         --title "$title" \
-        --notes-file "$notes_file"
+        --notes-file "$notes_file" \
+        $draft_flag
 
     rm -f "$notes_file"
 }
@@ -328,6 +404,9 @@ main() {
 
     log "\n${BOLD}phel-log release${NC}\n"
     [[ $DRY_RUN -eq 1 ]] && log "${YELLOW}DRY-RUN mode - no changes will be made${NC}\n"
+
+    REPO_SLUG=$(detect_repo_slug)
+    log "Repo: $REPO_SLUG"
 
     validate_semver "$NEW_VERSION" \
         || { log_err "Invalid version: $NEW_VERSION (expected X.Y.Z)"; exit 1; }
