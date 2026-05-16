@@ -22,9 +22,27 @@
    :fatal  500
    :report 600}) ; -> ALERT
 
+(defn- key->php-string
+  "Coerce a Phel map key into a PHP-array-safe string key."
+  [k]
+  (cond
+    (keyword? k) (name k)
+    (string? k)  k
+    :else        (str k)))
+
+(defn- map->php-assoc
+  "Convert a Phel map (or nil) into a PHP associative array. Required
+   because `Monolog\\LogRecord` typehints `$context` as `array`."
+  [m]
+  (let [src (or m {})
+        acc (php/array)]
+    (foreach [k (keys src)]
+      (php/aset acc (key->php-string k) (get src k)))
+    acc))
+
 (defn- event->log-record
   "Build a `Monolog\\LogRecord` from a phel event.
-   Uses `php/new` with named args mirroring Monolog 3.x positional order."
+   Uses `php/new` with positional args mirroring Monolog 3.x's signature."
   [event channel]
   (let [{:keys [level message data time-ms]} event
         millis-of-sec (php/% time-ms 1000)
@@ -33,12 +51,13 @@
                               (str "@" secs))
         with-millis   (php/-> datetime
                               (modify (str "+" millis-of-sec " milliseconds")))]
+    ;; Monolog\Level is a backed enum; construct via ::from(int), not (php/new).
     (php/new \Monolog\LogRecord
              with-millis
              channel
-             (php/new \Monolog\Level (get level->monolog-int level 200))
+             (php/:: \Monolog\Level (from (get level->monolog-int level 200)))
              message
-             (or data {}))))
+             (map->php-assoc data))))
 
 (defn monolog-appender
   "Bridge a `Monolog\\Handler\\HandlerInterface` as a phel.log appender.
