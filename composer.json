@@ -43,6 +43,14 @@
         "repl": [
             "Composer\\Config::disableProcessTimeout",
             "vendor/bin/phel repl"
+        ],
+        "smoke:quickstart": "vendor/bin/phel run phel-log-examples.quickstart",
+        "smoke:monolog":    "vendor/bin/phel run phel-log-examples.monolog-bridge",
+        "smoke:psr3":       "php examples/psr3.php",
+        "smoke": [
+            "@smoke:quickstart",
+            "@smoke:monolog",
+            "@smoke:psr3"
         ]
     }
 }

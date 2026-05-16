@@ -1,0 +1,119 @@
+(ns phel-log-examples.quickstart
+  (:require phel.log :as log))
+
+;; ===========================================================================
+;; Smoke: console + memory appenders, level filter, ns-filter, processors.
+;; Run: vendor/bin/phel run phel-log-examples.quickstart
+;; Exits non-zero on any failed assertion so it doubles as a CI gate.
+;; ===========================================================================
+
+(def failures (atom []))
+
+(defn- check! [name pred]
+  (if pred
+    (println " [OK] " name)
+    (do (println " [ERR]" name)
+        (swap! failures #(push % name)))))
+
+(println "\n== quickstart smoke ==")
+
+;; 1. Fresh config: memory appender capturing every level.
+(log/reset-config!)
+(let [[mem events] (log/memory-appender)]
+  (log/set-config! (merge log/default-config
+                          {:min-level :trace
+                           :appenders [mem]}))
+
+  (log/trace "trace-msg")
+  (log/debug "debug-msg" {:k 1})
+  (log/info  "info-msg"  {:user 42})
+  (log/warn  "warn-msg")
+  (log/error "error-msg" {:error (php/new \RuntimeException "boom")})
+  (log/fatal "fatal-msg")
+  (log/report "report-msg")
+
+  (let [captured (deref events)]
+    (check! "all 7 levels captured"
+            (= 7 (count captured)))
+    (check! "first event level is :trace"
+            (= :trace (get (first captured) :level)))
+    (check! "caller ns recorded"
+            (= "phel-log-examples.quickstart"
+               (get (first captured) :ns)))
+    (check! ":data merged onto event"
+            (= 42 (get (get (get captured 2) :data) :user)))
+    (check! ":error pulled out of data"
+            (php/is_a (get (get captured 4) :error) \Throwable))))
+
+;; 2. :min-level filter drops quieter events.
+(log/reset-config!)
+(let [[mem events] (log/memory-appender)]
+  (log/set-config! (merge log/default-config
+                          {:min-level :warn
+                           :appenders [mem]}))
+  (log/info  "skip me")
+  (log/warn  "keep me")
+  (log/error "also keep me")
+  (check! ":min-level :warn drops :info"
+          (= 2 (count (deref events)))))
+
+;; 3. ns-filter :deny overrides :allow.
+(log/reset-config!)
+(let [[mem events] (log/memory-appender)]
+  (log/set-config! (merge log/default-config
+                          {:min-level :trace
+                           :ns-filter {:deny ["phel-log-examples.*"]}
+                           :appenders [mem]}))
+  (log/info "should be denied")
+  (check! ":deny pattern silences caller ns"
+          (= 0 (count (deref events)))))
+
+;; 4. :processors decorate every event before fan-out.
+(log/reset-config!)
+(let [[mem events] (log/memory-appender)
+      tag-host    (fn [ev] (update ev :data #(merge % {:host "edge-1"})))]
+  (log/set-config! (merge log/default-config
+                          {:min-level :trace
+                           :appenders  [mem]
+                           :processors [tag-host]}))
+  (log/info "tagged")
+  (check! ":processor injects :host into :data"
+          (= "edge-1" (get (get (first (deref events)) :data) :host))))
+
+;; 5. :base-data merged under every event's :data.
+(log/reset-config!)
+(let [[mem events] (log/memory-appender)]
+  (log/set-config! (merge log/default-config
+                          {:min-level :trace
+                           :appenders [mem]
+                           :base-data {:app "smoke" :env "ci"}}))
+  (log/info "with base-data" {:user 1})
+  (let [data (get (first (deref events)) :data)]
+    (check! ":base-data merges :app"  (= "smoke" (get data :app)))
+    (check! ":base-data merges :env"  (= "ci"    (get data :env)))
+    (check! "event :data wins on conflict" (= 1  (get data :user)))))
+
+;; 6. line-formatter spot-check.
+(let [out (log/format-line {:level :info :ns "x" :time-ms 0
+                            :message "hi" :data {:k 1} :error nil})]
+  (check! "line formatter contains level" (php/str_contains out "[INFO ]"))
+  (check! "line formatter contains :data" (php/str_contains out ":k")))
+
+;; 7. console-appender writes something visible (manual eyeball check).
+(log/reset-config!)
+(log/set-config! (merge log/default-config
+                        {:min-level :info
+                         :appenders [(log/console-appender)]}))
+(println "\n-- expect console line below: --")
+(log/info "console-appender visible line" {:tag :smoke})
+(println "-- end console line --\n")
+
+;; ---------------------------------------------------------------------------
+;; Exit non-zero if any check failed.
+;; ---------------------------------------------------------------------------
+(let [fs (deref failures)]
+  (if (= 0 (count fs))
+    (println "\nquickstart OK\n")
+    (do (println (str "\nquickstart FAIL: " (count fs) " check(s) failed:"))
+        (foreach [f fs] (println " -" f))
+        (php/exit 1))))

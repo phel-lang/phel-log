@@ -37,3 +37,6 @@ jobs:
 
       - name: Run phel tests
         run: composer test
+
+      - name: Run smoke scripts (end-to-end)
+        run: composer smoke

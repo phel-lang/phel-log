@@ -1,0 +1,89 @@
+(ns phel-log-examples.monolog-bridge
+  (:require phel.log :as log))
+
+;; ===========================================================================
+;; Smoke: forward phel.log events through monolog-appender into a
+;; Monolog\Handler\TestHandler, then assert the recorded LogRecord shape.
+;; Run: vendor/bin/phel run phel-log-examples.monolog-bridge
+;; ===========================================================================
+
+(def failures (atom []))
+
+(defn- check! [name pred]
+  (if pred
+    (println " [OK] " name)
+    (do (println " [ERR]" name)
+        (swap! failures #(push % name)))))
+
+(println "\n== monolog-bridge smoke ==")
+
+(def handler (php/new \Monolog\Handler\TestHandler))
+
+(log/reset-config!)
+(log/set-config! (merge log/default-config
+                        {:min-level :trace
+                         :appenders [(log/monolog-appender
+                                       {:handler handler
+                                        :channel "smoke"})]}))
+
+(log/trace  "trace-line")
+(log/debug  "debug-line")
+(log/info   "info-line"   {:user 42})
+(log/warn   "warn-line")
+(log/error  "error-line"  {:order 7})
+(log/fatal  "fatal-line")
+(log/report "report-line")
+
+(def records (php/-> handler (getRecords)))
+
+(check! "TestHandler captured 7 records"
+        (= 7 (php/count records)))
+
+;; Each record exposes the channel + monolog Level + original message + context.
+(let [first-rec (php/aget records 0)]
+  (check! "channel is \"smoke\""
+          (= "smoke" (php/-> first-rec channel)))
+  (check! "first record level int is 100 (DEBUG/trace)"
+          (= 100 (php/-> (php/-> first-rec level) value))))
+
+(let [info-rec (php/aget records 2)]
+  (check! ":info maps to Monolog level int 200"
+          (= 200 (php/-> (php/-> info-rec level) value)))
+  (check! "info message preserved"
+          (= "info-line" (php/-> info-rec message)))
+  (check! "info :data lands in Monolog context"
+          (= 42 (php/aget (php/-> info-rec context) "user"))))
+
+(let [warn-rec (php/aget records 3)]
+  (check! ":warn maps to Monolog level int 300"
+          (= 300 (php/-> (php/-> warn-rec level) value))))
+
+(let [error-rec (php/aget records 4)]
+  (check! ":error maps to Monolog level int 400"
+          (= 400 (php/-> (php/-> error-rec level) value)))
+  (check! "error :data carries :order"
+          (= 7 (php/aget (php/-> error-rec context) "order"))))
+
+(let [report-rec (php/aget records 6)]
+  (check! ":report maps to Monolog level int 600"
+          (= 600 (php/-> (php/-> report-rec level) value))))
+
+;; TestHandler convenience: hasInfoRecords / hasErrorRecords.
+(check! "TestHandler hasInfoRecords true"
+        (php/-> handler (hasInfoRecords)))
+(check! "TestHandler hasErrorRecords true"
+        (php/-> handler (hasErrorRecords)))
+
+;; Missing :handler raises immediately.
+(check! "monolog-appender without :handler throws"
+        (try
+          (log/monolog-appender {})
+          false
+          (catch \InvalidArgumentException _ true)))
+
+(let [fs (deref failures)]
+  (if (= 0 (count fs))
+    (println "\nmonolog-bridge OK\n")
+    (do (println (str "\nmonolog-bridge FAIL: " (count fs) " check(s) failed:"))
+        (foreach [f fs] (println " -" f))
+        (php/exit 1))))
