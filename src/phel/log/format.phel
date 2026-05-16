@@ -53,8 +53,8 @@
       (nil? cur)                          acc
       (php/<= *max-previous-chain* depth) (push acc {:truncated true})
       :else                               (recur (php/-> cur (getPrevious))
-                   (php/+ depth 1)
-                   (push acc (serialize-throwable cur))))))
+                                                 (php/+ depth 1)
+                                                 (push acc (serialize-throwable cur))))))
 
 (defn serialize-throwable
   "Convert a `\\Throwable` into a plain map: class, message, code,
@@ -91,9 +91,9 @@
         head                                          (str (iso-time time-ms) " [" (pad-level level) "] " ns " - " message)
         body                                          (if (data-empty? data) "" (str " " (print-str data)))
         tail                                          (cond
-               (nil? error)                ""
-               (php/is_a error \Throwable) (short-throwable-tag error)
-               :else                       (str " | " error))]
+                                                        (nil? error)                ""
+                                                        (php/is_a error \Throwable) (short-throwable-tag error)
+                                                        :else                       (str " | " error))]
     (str head body tail)))
 
 (defn format-json
@@ -103,15 +103,15 @@
   [event]
   (let [{:keys [level ns time-ms message data error]} event
         payload                                       {:level   (name level)
-                 :ns      ns
-                 :time    (iso-time time-ms)
-                 :time-ms time-ms
-                 :message message
-                 :data    data
-                 :error   (when error
-                            (if (php/is_a error \Throwable)
-                              (serialize-throwable error)
-                              (str error)))}]
+                                                       :ns      ns
+                                                       :time    (iso-time time-ms)
+                                                       :time-ms time-ms
+                                                       :message message
+                                                       :data    data
+                                                       :error   (when error
+                                                                  (if (php/is_a error \Throwable)
+                                                                    (serialize-throwable error)
+                                                                    (str error)))}]
     (json/encode payload)))
 
 (def builtin-formatters
@@ -124,8 +124,8 @@
   [f]
   (cond
     (keyword? f)  (or (get builtin-formatters f)
-                     (throw (php/new \InvalidArgumentException
-                                     (str "Unknown formatter: " f))))
+                      (throw (php/new \InvalidArgumentException
+                                      (str "Unknown formatter: " f))))
     (function? f) f
     :else         (throw (php/new \InvalidArgumentException
-                          "Formatter must be a keyword or function"))))
+                                  "Formatter must be a keyword or function"))))

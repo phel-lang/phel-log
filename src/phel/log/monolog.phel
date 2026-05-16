@@ -48,9 +48,9 @@
         millis-of-sec                        (php/% time-ms 1000)
         secs                                 (php/intdiv time-ms 1000)
         datetime                             (php/new \DateTimeImmutable
-                               (str "@" secs))
+                                                      (str "@" secs))
         with-millis                          (php/-> datetime
-                              (modify (str "+" millis-of-sec " milliseconds")))]
+                                                     (modify (str "+" millis-of-sec " milliseconds")))]
     ;; Monolog\Level is a backed enum; construct via ::from(int), not (php/new).
     (php/new \Monolog\LogRecord
              with-millis
