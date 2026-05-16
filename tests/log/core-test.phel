@@ -66,6 +66,21 @@
       (is (= "from-php"  (get ev :message)))
       (is (= "psr"       (get (get ev :data) :via))))))
 
+(deftest test-enabled-honours-min-level-and-ns-filter
+  (log/reset-config!)
+  (log/set-config! (merge log/default-config
+                          {:min-level :warn
+                           :ns-filter {:deny ["blocked.*"]}}))
+  (is (not (log/enabled? :info  "any.ns")))
+  (is (log/enabled?       :warn  "ok.ns"))
+  (is (not (log/enabled? :warn  "blocked.x")))
+  (log/reset-config!))
+
+(deftest test-apply-processors-handles-empty-and-nil
+  (let [ev {:level :info :ns "n" :time-ms 0 :message "m" :data {} :error nil}]
+    (is (= ev (log/apply-processors ev [])))
+    (is (= ev (log/apply-processors ev nil)))))
+
 (deftest test-all-level-macros-emit
   (let [events (with-memory-config {:min-level :trace})]
     (log/trace  "t")

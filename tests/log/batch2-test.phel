@@ -85,6 +85,38 @@
 (deftest test-rotating-file-appender-requires-template
   (is (thrown? \InvalidArgumentException (log/rotating-file-appender {}))))
 
+(deftest test-rotating-file-appender-substitutes-ns-and-hour
+  (let [dir      (php/sys_get_temp_dir)
+        sub      (str dir "/phel-log-rot2-" (php/getmypid))
+        template (str sub "/{hour}/{ns}.log")
+        app      (log/rotating-file-appender {:path-template template})
+        ts       1715846400123                       ; 2024-05-16T08:00:00.123Z
+        ev       {:level :info :ns "my.app" :time-ms ts
+                  :message "hi" :data {} :error nil}
+        expected (str sub "/08/my.app.log")]
+    (log/write-event! app ev)
+    (is (php/file_exists expected))
+    (php/unlink expected)
+    (php/rmdir (php/dirname expected))
+    (php/rmdir sub)))
+
+(deftest test-rotating-file-appender-skips-mkdir-when-ensure-dir-false
+  ;; With :ensure-dir? false and a missing parent dir, write fails silently
+  ;; (file_put_contents returns false), leaving no file on disk. Silence
+  ;; the expected PHP "no such file" warning so the test output stays clean.
+  (let [missing (str (php/sys_get_temp_dir)
+                     "/phel-log-noensure-" (php/getmypid) "/sub/x.log")
+        app     (log/rotating-file-appender {:path-template missing
+                                             :ensure-dir?  false})
+        ev      {:level :info :ns "n" :time-ms 0
+                 :message "x" :data {} :error nil}
+        prev    (php/error_reporting 0)]
+    (try
+      (log/write-event! app ev)
+      (finally
+        (php/error_reporting prev)))
+    (is (not (php/file_exists missing)))))
+
 (deftest test-rotating-file-appender-writes-by-template
   (let [dir      (php/sys_get_temp_dir)
         sub      (str dir "/phel-log-rot-" (php/getmypid))

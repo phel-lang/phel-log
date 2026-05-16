@@ -45,3 +45,18 @@
 (deftest test-resolve-formatter-passes-fn-through
   (let [f (fn [_e] "x")]
     (is (= f (log/resolve-formatter f)))))
+
+(deftest test-resolve-formatter-rejects-non-keyword-non-fn
+  (is (thrown? \InvalidArgumentException (log/resolve-formatter 42))))
+
+(deftest test-line-formatter-renders-non-throwable-error
+  (let [out (log/format-line (merge (fixed-event) {:error "raw-string-err"}))]
+    (is (php/str_contains out " | raw-string-err"))))
+
+(deftest test-json-formatter-renders-non-throwable-error-as-string
+  (let [out (log/format-json (merge (fixed-event) {:error "bare"}))]
+    (is (php/str_contains out "\"error\":\"bare\""))))
+
+(deftest test-json-formatter-omits-error-when-nil
+  (let [out (log/format-json (fixed-event))]
+    (is (php/str_contains out "\"error\":null"))))

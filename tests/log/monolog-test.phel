@@ -1,0 +1,151 @@
+(ns phel-log-tests.log.monolog-test
+  (:require phel.log :as log)
+  (:require phel.test :refer [deftest is testing]))
+
+;; ===========================================================================
+;; Tests for the Monolog bridge (src/phel/log/monolog.phel).
+;; Uses Monolog\Handler\TestHandler (dev dep) to capture forwarded records.
+;; ===========================================================================
+
+(defn- fresh-handler [] (php/new \Monolog\Handler\TestHandler))
+
+(defn- event [level message data]
+  {:level   level
+   :ns      "my-app.bridge"
+   :time-ms 1715846400123
+   :message message
+   :data    (or data {})
+   :error   nil})
+
+;; ---------------------------------------------------------------------------
+;; Construction guards.
+;; ---------------------------------------------------------------------------
+
+(deftest test-monolog-appender-requires-handler
+  (is (thrown? \InvalidArgumentException (log/monolog-appender {}))))
+
+(deftest test-monolog-appender-shape
+  (let [app (log/monolog-appender {:handler (fresh-handler)})]
+    (is (= :monolog (get app :name)))
+    (is (= :line    (get app :formatter)))
+    (is (not (nil? (get app :write!))))))
+
+;; ---------------------------------------------------------------------------
+;; write-event! forwards to handler.handle() with correct record shape.
+;; ---------------------------------------------------------------------------
+
+(deftest test-write-event-forwards-record-to-handler
+  (let [h   (fresh-handler)
+        app (log/monolog-appender {:handler h :channel "smoke"})]
+    (log/write-event! app (event :info "hello" {:user 42}))
+    (let [recs (php/-> h (getRecords))
+          rec  (php/aget recs 0)]
+      (is (= 1 (php/count recs)))
+      (is (= "smoke"  (php/-> rec channel)))
+      (is (= "hello"  (php/-> rec message)))
+      (is (= 200      (php/-> (php/-> rec level) value)))
+      (is (= 42       (php/aget (php/-> rec context) "user"))))))
+
+(deftest test-channel-defaults-to-phel
+  (let [h   (fresh-handler)
+        app (log/monolog-appender {:handler h})]
+    (log/write-event! app (event :info "x" {}))
+    (is (= "phel" (php/-> (php/aget (php/-> h (getRecords)) 0) channel)))))
+
+;; ---------------------------------------------------------------------------
+;; Full level-mapping coverage: phel keyword -> Monolog int.
+;; ---------------------------------------------------------------------------
+
+(deftest test-level-mapping-all-seven-levels
+  (let [h   (fresh-handler)
+        app (log/monolog-appender {:handler h})]
+    (foreach [lvl [:trace :debug :info :warn :error :fatal :report]]
+      (log/write-event! app (event lvl (name lvl) {})))
+    (let [recs (php/-> h (getRecords))
+          ints (for [i :range [0 (php/count recs)]]
+                 (php/-> (php/-> (php/aget recs i) level) value))]
+      (is (= [100 100 200 300 400 500 600] ints)))))
+
+(deftest test-unknown-level-defaults-to-info
+  (let [h   (fresh-handler)
+        app (log/monolog-appender {:handler h})]
+    (log/write-event! app (event :weird "x" {}))
+    (is (= 200 (php/-> (php/-> (php/aget (php/-> h (getRecords)) 0) level) value)))))
+
+;; ---------------------------------------------------------------------------
+;; Context conversion: phel map -> PHP assoc array with string keys.
+;; ---------------------------------------------------------------------------
+
+(deftest test-data-keyword-keys-become-string-keys
+  (let [h   (fresh-handler)
+        app (log/monolog-appender {:handler h})]
+    (log/write-event! app (event :info "x" {:user-id 7 :region "eu"}))
+    (let [ctx (php/-> (php/aget (php/-> h (getRecords)) 0) context)]
+      (is (= 7    (php/aget ctx "user-id")))
+      (is (= "eu" (php/aget ctx "region"))))))
+
+(deftest test-data-string-keys-preserved
+  (let [h   (fresh-handler)
+        app (log/monolog-appender {:handler h})]
+    (log/write-event! app (event :info "x" {"already-string" 1}))
+    (is (= 1 (php/aget (php/-> (php/aget (php/-> h (getRecords)) 0) context)
+                       "already-string")))))
+
+(deftest test-nil-data-yields-empty-context
+  (let [h   (fresh-handler)
+        ;; build the event manually so :data is nil (bypasses make-event's `or`)
+        ev  {:level :info :ns "n" :time-ms 1715846400123
+             :message "x" :data nil :error nil}
+        app (log/monolog-appender {:handler h})]
+    (log/write-event! app ev)
+    (is (= 0 (php/count (php/-> (php/aget (php/-> h (getRecords)) 0) context))))))
+
+;; ---------------------------------------------------------------------------
+;; Timestamp: record's datetime carries the event's epoch millis.
+;; ---------------------------------------------------------------------------
+
+(deftest test-record-datetime-matches-event-time-ms
+  (let [h   (fresh-handler)
+        app (log/monolog-appender {:handler h})]
+    (log/write-event! app (event :info "x" {}))
+    (let [dt   (php/-> (php/aget (php/-> h (getRecords)) 0) datetime)
+          secs (php/-> dt (getTimestamp))
+          ms   (php/intval (php/-> dt (format "v")))]
+      (is (= 1715846400 secs))
+      (is (= 123        ms)))))
+
+;; ---------------------------------------------------------------------------
+;; Per-appender :min-level still gates writes through write-event!.
+;; ---------------------------------------------------------------------------
+
+(deftest test-min-level-skips-quieter-events
+  (let [h   (fresh-handler)
+        app (log/monolog-appender {:handler h :min-level :error})]
+    (log/write-event! app (event :info  "skip" {}))
+    (log/write-event! app (event :error "keep" {}))
+    (let [recs (php/-> h (getRecords))]
+      (is (= 1      (php/count recs)))
+      (is (= "keep" (php/-> (php/aget recs 0) message))))))
+
+;; ---------------------------------------------------------------------------
+;; End-to-end through the public log/info macro + config.
+;; ---------------------------------------------------------------------------
+
+(deftest test-end-to-end-via-log-info-macro
+  (log/reset-config!)
+  (let [h (fresh-handler)]
+    (log/set-config! (merge log/default-config
+                            {:min-level :trace
+                             :appenders [(log/monolog-appender
+                                          {:handler h :channel "e2e"})]}))
+    (log/info  "hi" {:k 1})
+    (log/error "oops")
+    (let [recs       (php/-> h (getRecords))
+          has-info?  (php/-> h (hasInfoRecords))
+          has-error? (php/-> h (hasErrorRecords))]
+      (is (= 2 (php/count recs)))
+      (is has-info?)
+      (is has-error?)
+      (is (= "e2e" (php/-> (php/aget recs 0) channel)))
+      (is (= 1     (php/aget (php/-> (php/aget recs 0) context) "k")))))
+  (log/reset-config!))

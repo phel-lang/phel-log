@@ -20,6 +20,10 @@
         ev  (log/make-event :error "n" "fail" {:error err})]
     (is (= err (get ev :error)))))
 
+(deftest test-make-event-non-string-non-vector-message-stringified
+  (let [ev (log/make-event :info "n" 42 nil)]
+    (is (= "42" (get ev :message)))))
+
 (deftest test-now-ms-positive-int
   (let [t (log/now-ms)]
     (is (php/is_int t))
