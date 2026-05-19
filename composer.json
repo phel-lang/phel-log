@@ -23,7 +23,7 @@
     "prefer-stable": true,
     "require": {
         "php": ">=8.4",
-        "phel-lang/phel-lang": "^0.37",
+        "phel-lang/phel-lang": "^0.39",
         "psr/log": "^3.0"
     },
     "require-dev": {
