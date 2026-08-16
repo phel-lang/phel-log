@@ -51,10 +51,10 @@
          acc   []]
     (cond
       (nil? cur)                          acc
-      (php/<= *max-previous-chain* depth) (push acc {:truncated true})
+      (php/<= *max-previous-chain* depth) (conj acc {:truncated true})
       :else                               (recur (php/-> cur (getPrevious))
                                                  (php/+ depth 1)
-                                                 (push acc (serialize-throwable cur))))))
+                                                 (conj acc (serialize-throwable cur))))))
 
 (defn serialize-throwable
   "Convert a `\\Throwable` into a plain map: class, message, code,
@@ -126,6 +126,6 @@
     (keyword? f)  (or (get builtin-formatters f)
                       (throw (php/new \InvalidArgumentException
                                       (str "Unknown formatter: " f))))
-    (function? f) f
+    (fn? f) f
     :else         (throw (php/new \InvalidArgumentException
                                   "Formatter must be a keyword or function"))))

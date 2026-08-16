@@ -190,6 +190,6 @@
          appender    (merge {:name      :memory
                              :formatter :line
                              :write!    (fn [event _line]
-                                          (swap! events-atom #(push % event)))}
+                                          (swap! events-atom #(conj % event)))}
                             opts)]
      [appender events-atom])))
