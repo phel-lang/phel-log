@@ -18,7 +18,7 @@
 ;; ---------------------------------------------------------------------------
 
 (deftest test-serialize-throwable-flat-shape
-  (let [t (php/new \RuntimeException "boom" 42)
+  (let [t (new \RuntimeException "boom" 42)
         s (log/serialize-throwable t)]
     (is (= "RuntimeException" (get s :class)))
     (is (= "boom" (get s :message)))
@@ -29,9 +29,9 @@
     (is (= [] (get s :previous)))))
 
 (deftest test-serialize-throwable-recurses-previous-chain
-  (let [root  (php/new \RuntimeException "root")
-        mid   (php/new \RuntimeException "mid" 0 root)
-        outer (php/new \RuntimeException "outer" 0 mid)
+  (let [root  (new \RuntimeException "root")
+        mid   (new \RuntimeException "mid" 0 root)
+        outer (new \RuntimeException "outer" 0 mid)
         s     (log/serialize-throwable outer)
         prev  (get s :previous)]
     (is (= 2 (count prev)))
@@ -48,7 +48,7 @@
 ;; ---------------------------------------------------------------------------
 
 (deftest test-line-formatter-short-throwable-tag
-  (let [t   (php/new \LogicException "bad state")
+  (let [t   (new \LogicException "bad state")
         ev  {:level :error :ns "x" :time-ms 0
              :message "op failed" :data {} :error t}
         out (log/format-line ev)]
@@ -56,7 +56,7 @@
     (is (php/str_contains out ".php:"))))
 
 (deftest test-json-formatter-embeds-full-throwable
-  (let [t   (php/new \RuntimeException "kaboom")
+  (let [t   (new \RuntimeException "kaboom")
         ev  {:level :error :ns "x" :time-ms 0
              :message "m" :data {} :error t}
         out (log/format-json ev)]
@@ -148,14 +148,14 @@
         ev       {:level :info :ns "n" :time-ms 0
                   :message "x" :data {} :error nil}]
     (dotimes [_ 50]
-             (is (nil? (drop-all ev))))))
+      (is (nil? (drop-all ev))))))
 
 (deftest test-sampler-one-keeps-all
   (let [keep-all (log/sampler 1.0)
         ev       {:level :info :ns "n" :time-ms 0
                   :message "x" :data {} :error nil}]
     (dotimes [_ 50]
-             (is (= ev (keep-all ev))))))
+      (is (= ev (keep-all ev))))))
 
 (deftest test-level-sampler-only-samples-below-gate
   ;; Gate :info, rate 0.0 -> every :info event drops, every :warn passes.
@@ -241,7 +241,7 @@
   (let [prev (log/get-config)]
     (is (thrown? \RuntimeException
                  (log/with-captured-events _
-                                           (throw (php/new \RuntimeException "x")))))
+                                           (throw (new \RuntimeException "x")))))
     (is (= prev (log/get-config)))))
 
 ;; ---------------------------------------------------------------------------
@@ -252,7 +252,7 @@
 (deftest test-make-psr-logger-routes-into-pipeline
   (log/with-captured-events events
                             (let [logger (log/make-psr-logger "my-app.users")]
-                              (php/-> logger (info "hello {who}" (php-associative-array "who" "world"))))
+                              (.info logger "hello {who}" (php-associative-array "who" "world")))
                             (let [ev (first (deref events))]
                               (is (= :info (get ev :level)))
                               (is (= "hello world" (get ev :message)))

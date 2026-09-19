@@ -86,7 +86,7 @@
   (let [events (with-mem {})]
     (is (thrown? \RuntimeException
                  (log/timed :info "boom"
-                            (throw (php/new \RuntimeException "x")))))
+                            (throw (new \RuntimeException "x")))))
     (let [ev (first (deref events))]
       (is (= :error (get ev :level)))
       (is (php/is_a (get (get ev :data) :error) \Throwable))
@@ -98,17 +98,17 @@
 
 (deftest test-error-macro-accepts-bare-throwable
   (let [events (with-mem {})
-        err    (php/new \RuntimeException "kaboom")]
+        err    (new \RuntimeException "kaboom")]
     (log/error "failed" err)
     (let [ev (first (deref events))]
       (is (php/is_a (get ev :error) \Throwable))
-      (is (= "kaboom" (php/-> (get ev :error) (getMessage)))))))
+      (is (= "kaboom" (.getMessage (get ev :error)))))))
 
 (deftest test-info-macro-accepts-bare-throwable
   (let [events (with-mem {})
-        err    (php/new \LogicException "lo")]
+        err    (new \LogicException "lo")]
     (log/info "weird" err)
-    (is (= "lo" (php/-> (get (first (deref events)) :error) (getMessage))))))
+    (is (= "lo" (.getMessage (get (first (deref events)) :error))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Pre-filter appenders: when no appender accepts, event is not built
@@ -162,4 +162,4 @@
     (is (not (log/passes-filter? "other.app" cfg)))
     ;; Burn through the cache path repeatedly:
     (dotimes [_ 100]
-             (is (log/passes-filter? "my-app.api" cfg)))))
+      (is (log/passes-filter? "my-app.api" cfg)))))

@@ -97,7 +97,7 @@ Write your own by returning a map of the same shape; everything in
 Re-use every existing Monolog handler (Slack, Sentry, Syslog, RotatingFile, ...):
 
 ```phel
-(let [slack (php/new \Monolog\Handler\SlackWebhookHandler
+(let [slack (new \Monolog\Handler\SlackWebhookHandler
                      webhook-url
                      "#alerts"
                      "phel-bot"
@@ -105,7 +105,7 @@ Re-use every existing Monolog handler (Slack, Sentry, Syslog, RotatingFile, ...)
                      nil
                      false
                      false
-                     (php/-> \Monolog\Level (Error)))]
+                     (\Monolog\Level/Error))]
   (log/update-config!
     {:appenders [(log/console-appender)
                  (log/monolog-appender {:handler slack

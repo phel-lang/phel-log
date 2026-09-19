@@ -24,8 +24,8 @@
   ;; type-inferring `rate` as int, which would make PHP 8.4 deprecate
   ;; float arguments at the boundary.
   (when (or (php/< rate 0.0) (php/< 1.0 rate))
-    (throw (php/new \InvalidArgumentException
-                    (str "sampler rate must be in [0, 1], got " rate))))
+    (throw (new \InvalidArgumentException
+                (str "sampler rate must be in [0, 1], got " rate))))
   (let [bound (php/intval (php/* rate (php/mt_getrandmax)))]
     (fn [event]
       (when (php/<= (php/mt_rand) bound) event))))
@@ -59,8 +59,8 @@
    (rate-limiter max-per-second {}))
   ([max-per-second opts]
    (when (php/< max-per-second 1)
-     (throw (php/new \InvalidArgumentException
-                     ":max-per-second must be >= 1")))
+     (throw (new \InvalidArgumentException
+                 ":max-per-second must be >= 1")))
    (let [key-fn (get opts :key-fn (fn [ev] (get ev :ns)))
          state  (atom {})]
      (fn [event]

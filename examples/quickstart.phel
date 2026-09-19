@@ -40,7 +40,7 @@
   (log/debug  "d")
   (log/info   "i" {:user 42})
   (log/warn   "w")
-  (log/error  "e" {:error (php/new \RuntimeException "boom")})
+  (log/error  "e" {:error (new \RuntimeException "boom")})
   (log/fatal  "f")
   (log/report "r")
   (let [evs (deref events)]

@@ -16,7 +16,7 @@
     (is (= {} (get ev :data)))))
 
 (deftest test-make-event-extracts-error-from-data
-  (let [err (php/new \RuntimeException "boom")
+  (let [err (new \RuntimeException "boom")
         ev  (log/make-event :error "n" "fail" {:error err})]
     (is (= err (get ev :error)))))
 
