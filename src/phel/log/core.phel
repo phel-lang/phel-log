@@ -262,7 +262,7 @@
 ;; boilerplate every PHP framework integration needs.
 ;;
 ;;   (def $log (log/make-psr-logger "my-app.users"))
-;;   (php/-> $log (info "user signed up" (php/array)))
+;;   (.info $log "user signed up" (php/array))
 ;; ---------------------------------------------------------------------------
 
 (defn make-psr-logger
@@ -271,11 +271,11 @@
    events whose context lacks an explicit `_ns` override."
   ([] (make-psr-logger "psr"))
   ([channel]
-   (php/new \Phel\PhelLog\PsrLogger
-            (fn [level message context]
-              (let [ns-str (or (php/aget context "_ns") channel)]
-                (log-event! (keyword level) ns-str message context)))
-            channel)))
+   (new \Phel\PhelLog\PsrLogger
+        (fn [level message context]
+          (let [ns-str (or (php/aget context "_ns") channel)]
+            (log-event! (keyword level) ns-str message context)))
+        channel)))
 
 ;; ---------------------------------------------------------------------------
 ;; with-captured-events: scoped memory appender for tests. Snapshots

@@ -82,9 +82,9 @@ See [monolog-bridge.md](monolog-bridge.md).
    :write! (fn [event line]
              (php/syslog
                (case (get event :level)
-                 :error (php/-> \LOG_ERR)
-                 :warn  (php/-> \LOG_WARNING)
-                 (php/-> \LOG_INFO))
+                 :error \LOG_ERR
+                 :warn  \LOG_WARNING
+                 \LOG_INFO)
                line))})
 
 (log/update-config! {:appenders [(syslog-appender)]})

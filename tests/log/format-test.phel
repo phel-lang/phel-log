@@ -24,7 +24,7 @@
     (is (php/str_contains out "1"))))
 
 (deftest test-line-formatter-renders-error-message
-  (let [err (php/new \RuntimeException "kaboom")
+  (let [err (new \RuntimeException "kaboom")
         out (log/format-line (merge (fixed-event) {:error err}))]
     (is (php/str_contains out "kaboom"))))
 

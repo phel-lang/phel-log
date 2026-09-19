@@ -46,15 +46,15 @@
   "Walk `\\Throwable::getPrevious()` up to `*max-previous-chain*` deep
    and return a vector of serialised maps."
   [t]
-  (loop [cur   (php/-> t (getPrevious))
+  (loop [cur   (.getPrevious t)
          depth 0
          acc   []]
     (cond
       (nil? cur)                          acc
-      (php/<= *max-previous-chain* depth) (push acc {:truncated true})
-      :else                               (recur (php/-> cur (getPrevious))
+      (php/<= *max-previous-chain* depth) (conj acc {:truncated true})
+      :else                               (recur (.getPrevious cur)
                                                  (php/+ depth 1)
-                                                 (push acc (serialize-throwable cur))))))
+                                                 (conj acc (serialize-throwable cur))))))
 
 (defn serialize-throwable
   "Convert a `\\Throwable` into a plain map: class, message, code,
@@ -63,11 +63,11 @@
   [t]
   (if (php/is_a t \Throwable)
     {:class    (php/get_class t)
-     :message  (php/-> t (getMessage))
-     :code     (php/-> t (getCode))
-     :file     (php/-> t (getFile))
-     :line     (php/-> t (getLine))
-     :trace    (php/-> t (getTraceAsString))
+     :message  (.getMessage t)
+     :code     (.getCode t)
+     :file     (.getFile t)
+     :line     (.getLine t)
+     :trace    (.getTraceAsString t)
      :previous (previous-chain t)}
     t))
 
@@ -77,9 +77,9 @@
    row; the full trace lives in the json formatter."
   [t]
   (let [klass (php/get_class t)
-        msg   (php/-> t (getMessage))
-        file  (php/basename (php/-> t (getFile)))
-        line  (php/-> t (getLine))]
+        msg   (.getMessage t)
+        file  (php/basename (.getFile t))
+        line  (.getLine t)]
     (str " | " klass ": " msg " (" file ":" line ")")))
 
 (defn format-line
@@ -123,9 +123,9 @@
   "Resolve a formatter that is either a keyword (built-in) or a function."
   [f]
   (cond
-    (keyword? f)  (or (get builtin-formatters f)
-                      (throw (php/new \InvalidArgumentException
-                                      (str "Unknown formatter: " f))))
-    (function? f) f
-    :else         (throw (php/new \InvalidArgumentException
-                                  "Formatter must be a keyword or function"))))
+    (keyword? f) (or (get builtin-formatters f)
+                      (throw (new \InvalidArgumentException
+                                  (str "Unknown formatter: " f))))
+    (fn? f)      f
+    :else        (throw (new \InvalidArgumentException
+                              "Formatter must be a keyword or function"))))

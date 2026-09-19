@@ -23,9 +23,9 @@
             line      (formatter event)
             writer    (get appender :write!)]
         (when (nil? writer)
-          (throw (php/new \InvalidArgumentException
-                          (str "Appender " (get appender :name :unnamed)
-                               " has no :write! function"))))
+          (throw (new \InvalidArgumentException
+                      (str "Appender " (get appender :name :unnamed)
+                           " has no :write! function"))))
         (writer event line)))))
 
 ;; ---------------------------------------------------------------------------
@@ -110,8 +110,8 @@
   [opts]
   (let [path (get opts :path)]
     (when (nil? path)
-      (throw (php/new \InvalidArgumentException
-                      "file-appender requires :path"))))
+      (throw (new \InvalidArgumentException
+                  "file-appender requires :path"))))
   (merge {:name      :file
           :formatter :line
           :write!    (fn [event line]
@@ -166,8 +166,8 @@
   [opts]
   (let [template (get opts :path-template)]
     (when (nil? template)
-      (throw (php/new \InvalidArgumentException
-                      "rotating-file-appender requires :path-template"))))
+      (throw (new \InvalidArgumentException
+                  "rotating-file-appender requires :path-template"))))
   (let [ensure? (get opts :ensure-dir? true)]
     (merge {:name      :rotating-file
             :formatter :line
@@ -190,6 +190,6 @@
          appender    (merge {:name      :memory
                              :formatter :line
                              :write!    (fn [event _line]
-                                          (swap! events-atom #(push % event)))}
+                                          (swap! events-atom #(conj % event)))}
                             opts)]
      [appender events-atom])))

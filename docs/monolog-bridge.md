@@ -19,7 +19,7 @@ composer require monolog/monolog
   (:require phel.log :as log))
 
 (let [slack-url     "https://hooks.slack.com/..."
-      slack-handler (php/new \Monolog\Handler\SlackWebhookHandler
+      slack-handler (new \Monolog\Handler\SlackWebhookHandler
                              slack-url
                              "#alerts"
                              "phel-bot"
@@ -27,11 +27,11 @@ composer require monolog/monolog
                              nil
                              false
                              false
-                             (php/-> \Monolog\Level (Error)))
-      file-handler  (php/new \Monolog\Handler\RotatingFileHandler
+                             (\Monolog\Level/Error))
+      file-handler  (new \Monolog\Handler\RotatingFileHandler
                              "/var/log/my-app.log"
                              7
-                             (php/-> \Monolog\Level (Info)))]
+                             (\Monolog\Level/Info))]
   (log/update-config!
     {:appenders [(log/console-appender)
                  (log/monolog-appender {:handler slack-handler

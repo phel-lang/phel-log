@@ -42,22 +42,21 @@
 
 (defn- event->log-record
   "Build a `Monolog\\LogRecord` from a phel event.
-   Uses `php/new` with positional args mirroring Monolog 3.x's signature."
+   Uses `new` with positional args mirroring Monolog 3.x's signature."
   [event channel]
   (let [{:keys [level message data time-ms]} event
         millis-of-sec                        (php/% time-ms 1000)
         secs                                 (php/intdiv time-ms 1000)
-        datetime                             (php/new \DateTimeImmutable
-                                                      (str "@" secs))
-        with-millis                          (php/-> datetime
-                                                     (modify (str "+" millis-of-sec " milliseconds")))]
-    ;; Monolog\Level is a backed enum; construct via ::from(int), not (php/new).
-    (php/new \Monolog\LogRecord
-             with-millis
-             channel
-             (php/:: \Monolog\Level (from (get level->monolog-int level 200)))
-             message
-             (map->php-assoc data))))
+        datetime                             (new \DateTimeImmutable
+                                                  (str "@" secs))
+        with-millis                          (.modify datetime (str "+" millis-of-sec " milliseconds"))]
+    ;; Monolog\Level is a backed enum; construct via ::from(int), not (new).
+    (new \Monolog\LogRecord
+         with-millis
+         channel
+         (\Monolog\Level/from (get level->monolog-int level 200))
+         message
+         (map->php-assoc data))))
 
 (defn monolog-appender
   "Bridge a `Monolog\\Handler\\HandlerInterface` as a phel.log appender.
@@ -67,12 +66,12 @@
   [opts]
   (let [handler (get opts :handler)]
     (when (nil? handler)
-      (throw (php/new \InvalidArgumentException
-                      "monolog-appender requires :handler"))))
+      (throw (new \InvalidArgumentException
+                  "monolog-appender requires :handler"))))
   (merge {:name      :monolog
           :formatter :line  ; Monolog has its own formatting, but we still keep one for fall-through write!s
           :write!    (fn [event _line]
                        (let [channel (get opts :channel "phel")
                              record  (event->log-record event channel)]
-                         (php/-> (get opts :handler) (handle record))))}
+                         (.handle (get opts :handler) record)))}
          opts))

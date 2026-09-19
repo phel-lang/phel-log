@@ -23,7 +23,7 @@
 ;; 1. Wire a Monolog handler as a phel.log appender. One call: monolog-appender.
 ;; ---------------------------------------------------------------------------
 
-(def handler (php/new \Monolog\Handler\TestHandler))
+(def handler (new \Monolog\Handler\TestHandler))
 
 (log/init! :trace
            [(log/monolog-appender {:handler handler :channel "smoke"})])
@@ -42,7 +42,7 @@
 (log/fatal  "fatal-line")
 (log/report "report-line")
 
-(def records (php/-> handler (getRecords)))
+(def records (.getRecords handler))
 
 (assert! "7 records captured" (= 7 (php/count records)))
 
@@ -54,17 +54,17 @@
 
 (let [info-rec (php/aget records 2)]
   (assert! ":info -> Monolog 200"
-           (= 200 (php/-> (php/-> info-rec level) value)))
+           (= 200 (.-value (.-level info-rec))))
   (assert! "message preserved"
-           (= "info-line" (php/-> info-rec message)))
+           (= "info-line" (.-message info-rec)))
   (assert! ":data lands in context"
-           (= 42 (php/aget (php/-> info-rec context) "user")))
+           (= 42 (php/aget (.-context info-rec) "user")))
   (assert! "channel forwarded"
-           (= "smoke" (php/-> info-rec channel))))
+           (= "smoke" (.-channel info-rec))))
 
 ;; TestHandler convenience helpers — useful in real assertions.
-(let [has-info  (php/-> handler (hasInfoRecords))
-      has-error (php/-> handler (hasErrorRecords))]
+(let [has-info  (.hasInfoRecords handler)
+      has-error (.hasErrorRecords handler)]
   (assert! "TestHandler.hasInfoRecords"  has-info)
   (assert! "TestHandler.hasErrorRecords" has-error))
 

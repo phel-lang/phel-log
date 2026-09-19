@@ -22,8 +22,8 @@
   [level]
   (let [rank (get level-ranks level)]
     (when (nil? rank)
-      (throw (php/new \InvalidArgumentException
-                      (str "Unknown log level: " level))))
+      (throw (new \InvalidArgumentException
+                  (str "Unknown log level: " level))))
     rank))
 
 (defn level<=
