@@ -22,7 +22,7 @@
     "type": "library",
     "prefer-stable": true,
     "require": {
-        "php": ">=8.4",
+        "php": ">=8.5",
         "phel-lang/phel-lang": "^0.53",
         "psr/log": "^3.0"
     },
