@@ -51,10 +51,10 @@
                                                   (str "@" secs))
         with-millis                          (.modify datetime (str "+" millis-of-sec " milliseconds"))]
     ;; Monolog\Level is a backed enum; construct via ::from(int), not (new).
-    (new \Monolog\LogRecord
+    (new Monolog.LogRecord
          with-millis
          channel
-         (\Monolog\Level/from (get level->monolog-int level 200))
+         (Monolog.Level/from (get level->monolog-int level 200))
          message
          (map->php-assoc data))))
 

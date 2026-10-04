@@ -7,7 +7,7 @@
 ;; Uses Monolog\Handler\TestHandler (dev dep) to capture forwarded records.
 ;; ===========================================================================
 
-(defn- fresh-handler [] (new \Monolog\Handler\TestHandler))
+(defn- fresh-handler [] (new Monolog.Handler.TestHandler))
 
 (defn- event [level message data]
   {:level   level
