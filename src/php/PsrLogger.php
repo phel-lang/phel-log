@@ -23,7 +23,7 @@ use function is_string;
  *
  * From Phel:
  *
- *     (new \Phel\PhelLog\PsrLogger
+ *     (new Phel.PhelLog.PsrLogger
  *              (fn [level message data]
  *                (log/log-event! (keyword level) (php/get $context "_ns" "psr") message data)))
  *

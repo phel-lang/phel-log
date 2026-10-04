@@ -16,10 +16,10 @@
 
 (def failed (atom 0))
 
-(defn- assert! [name pred]
+(defn- assert! [label pred]
   (if pred
-    (println " [OK] " name)
-    (do (println " [ERR]" name)
+    (println " [OK] " label)
+    (do (println " [ERR]" label)
         (swap! failed inc))))
 
 (defn- with-mem

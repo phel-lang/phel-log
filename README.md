@@ -25,7 +25,7 @@ Data-driven logging library for [Phel Lang](https://phel-lang.org/). Inspired by
 composer require phel-lang/phel-log
 ```
 
-Requires PHP 8.5+ and `phel-lang/phel-lang` 0.53+.
+Requires PHP 8.5+ and `phel-lang/phel-lang` 0.54+.
 Optional: `monolog/monolog` 3.x for the Monolog handler bridge.
 
 ## Configure
@@ -97,7 +97,7 @@ Write your own by returning a map of the same shape; everything in
 Re-use every existing Monolog handler (Slack, Sentry, Syslog, RotatingFile, ...):
 
 ```phel
-(let [slack (new \Monolog\Handler\SlackWebhookHandler
+(let [slack (new Monolog.Handler.SlackWebhookHandler
                      webhook-url
                      "#alerts"
                      "phel-bot"
@@ -105,7 +105,7 @@ Re-use every existing Monolog handler (Slack, Sentry, Syslog, RotatingFile, ...)
                      nil
                      false
                      false
-                     (\Monolog\Level/Error))]
+                     (Monolog.Level/Error))]
   (log/update-config!
     {:appenders [(log/console-appender)
                  (log/monolog-appender {:handler slack

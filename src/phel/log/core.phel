@@ -64,8 +64,8 @@
   "True iff `appender` accepts an event at `level`. Per-appender
    :min-level overrides the global one."
   [appender level]
-  (let [floor (get appender :min-level)]
-    (or (nil? floor) (level<= floor level))))
+  (let [min-level (get appender :min-level)]
+    (or (nil? min-level) (level<= min-level level))))
 
 (defn- any-accepts?
   "True iff at least one appender in `appenders` accepts an event at
@@ -271,7 +271,7 @@
    events whose context lacks an explicit `_ns` override."
   ([] (make-psr-logger "psr"))
   ([channel]
-   (new \Phel\PhelLog\PsrLogger
+   (new Phel.PhelLog.PsrLogger
         (fn [level message context]
           (let [ns-str (or (php/aget context "_ns") channel)]
             (log-event! (keyword level) ns-str message context)))

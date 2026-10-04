@@ -13,17 +13,17 @@
 
 (def failed (atom 0))
 
-(defn- assert! [name pred]
+(defn- assert! [label pred]
   (if pred
-    (println " [OK] " name)
-    (do (println " [ERR]" name)
+    (println " [OK] " label)
+    (do (println " [ERR]" label)
         (swap! failed inc))))
 
 ;; ---------------------------------------------------------------------------
 ;; 1. Wire a Monolog handler as a phel.log appender. One call: monolog-appender.
 ;; ---------------------------------------------------------------------------
 
-(def handler (new \Monolog\Handler\TestHandler))
+(def handler (new Monolog.Handler.TestHandler))
 
 (log/init! :trace
            [(log/monolog-appender {:handler handler :channel "smoke"})])
