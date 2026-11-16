@@ -25,7 +25,7 @@ Data-driven logging library for [Phel Lang](https://phel-lang.org/). Inspired by
 composer require phel-lang/phel-log
 ```
 
-Requires PHP 8.5+ and `phel-lang/phel-lang` 0.54+.
+Requires PHP 8.5+ and `phel-lang/phel-lang` 1.0.0-rc3 or later.
 Optional: `monolog/monolog` 3.x for the Monolog handler bridge.
 
 ## Configure
